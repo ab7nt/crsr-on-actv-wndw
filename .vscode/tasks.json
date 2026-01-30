@@ -1,0 +1,28 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "shell",
+            "label": "swift-build",
+            "command": "swiftc",
+            "args": [
+                "Source/main.swift",
+                "Source/AppDelegate.swift",
+                "Source/MouseTracker.swift",
+                "Source/WindowDetector.swift",
+                "Source/OverlayIndicator.swift",
+                "Source/StateController.swift",
+                "-o",
+                "CursorOverlay"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

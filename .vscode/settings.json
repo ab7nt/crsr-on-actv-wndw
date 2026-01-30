@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^swiftc Source/main\\.swift Source/AppDelegate\\.swift Source/MouseTracker\\.swift Source/WindowDetector\\.swift Source/OverlayIndicator\\.swift Source/StateController\\.swift -o CursorOverlay$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
