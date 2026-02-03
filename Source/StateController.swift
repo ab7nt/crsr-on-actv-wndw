@@ -8,6 +8,7 @@ class StateController: MouseTrackerDelegate {
     
     // Throttling to prevent excessive Accessibility API calls (expensive)
     private var lastCheckTime: TimeInterval = 0
+    private var lastLogTime: TimeInterval = 0 // Debug throttle
     private let checkInterval: TimeInterval = 0.05 // ~20 checks per second max
     
     private var isEnabled = true
@@ -23,11 +24,34 @@ class StateController: MouseTrackerDelegate {
         
         setupMenu()
         setupClickMonitoring()
+        setupSpaceObserver()
     }
     
     deinit {
         if let monitor = clickMonitor {
             NSEvent.removeMonitor(monitor)
+        }
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+    }
+    
+    private func setupSpaceObserver() {
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleSpaceChange),
+            name: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil
+        )
+    }
+    
+    @objc private func handleSpaceChange() {
+        // Space switch animation is slow (~0.4s). Check repeatedly.
+        let delays = [0.1, 0.5, 0.8]
+        for delay in delays {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                // We use current mouse location
+                let loc = NSEvent.mouseLocation
+                self.checkState(at: loc)
+            }
         }
     }
     
@@ -90,91 +114,178 @@ class StateController: MouseTrackerDelegate {
     
     private func checkState(at cursorPoint: CGPoint) {
         // If accessibility isn't enabled, we can't do anything meaningful
-        guard WindowDetector.isAccessibilityTrusted() else { 
-            Logger.shared.log("Accessiblity NOT trusted")
-            return 
-        }
+        guard WindowDetector.isAccessibilityTrusted() else { return }
         
-        // New Logic: Screen-Based Detection
-        // 1. Where is the active window?
-        // 2. Where is the cursor?
-        // 3. Are they on different screens?
+        let screens = NSScreen.screens
+        guard let primaryScreenHeight = screens.first?.frame.height else { return }
         
-        guard let activeWindowFrame = windowDetector.getActiveWindowFrame() else {
-            // No active window found? Assume safe.
-            setOverlay(visible: false)
+        // ---------------------------------------------------------
+        // PHASE 1: SYSTEM UI EXCLUSION (Fastest)
+        // ---------------------------------------------------------
+        
+        // 1. Menu Bar Check
+        if isCursorInMenuBar(cursorPoint, screens: screens) {
+            updateOverlay(show: false, reason: "MenuBar")
             return
         }
         
-        let screens = NSScreen.screens
+        // 2. Identify Metadata
+        let axCursorPoint = CGPoint(x: cursorPoint.x, y: primaryScreenHeight - cursorPoint.y)
+        let pidUnder = windowDetector.getAppPID(at: axCursorPoint)
+        let activeApp = NSWorkspace.shared.frontmostApplication
         
-        // Find screen containing active window center
-        // Note: activeWindowFrame is CG (Top-Left 0,0). Screens usually handled with Cocoa (Bottom-Left 0,0) in high-level checks, 
-        // BUT here we need to map carefuly.
-        // Let's normalize everything to Cocoa coordinates (Bottom-Left) for NSScreen checks.
+        // ---------------------------------------------------------
+        // PHASE 2: PID / INTERACTION CHECK (Precision)
+        // ---------------------------------------------------------
         
-        guard let primaryScreenHeight = screens.first?.frame.height else { return }
-        
-        // Flip CoreGraphics Rect to Cocoa Rect
-        let cocoaActiveWindowFrame = CGRect(
-            x: activeWindowFrame.origin.x,
-            y: primaryScreenHeight - (activeWindowFrame.origin.y + activeWindowFrame.height),
-            width: activeWindowFrame.width,
-            height: activeWindowFrame.height
-        )
-        
-        // Which screen has the active window?
-        // Simple heuristic: use the screen that contains the greatest area of the window.
-        // Or simpler: Center point.
-        let activeWindowScreen = screens.first { $0.frame.intersects(cocoaActiveWindowFrame) }
-        
-        // Which screen has the cursor?
-        // cursorPoint is already Cocoa (Global Screen Coordinates) from MouseTracker
-        let cursorScreen = screens.first { NSPointInRect(cursorPoint, $0.frame) }
-        
-        // Logic:
-        // If they are on DIFFERENT screens -> Show Overlay
-        // If they are on SAME screen -> Hide Overlay
-        
-        let shouldShow: Bool
-        
-        if let activeScreen = activeWindowScreen, let curScreen = cursorScreen {
-            shouldShow = (activeScreen != curScreen)
-            // Excessive logging, uncomment to debug
-            // Logger.shared.log("ActiveScreen: \(activeScreen.localizedName) CursorScreen: \(curScreen.localizedName) ShouldShow: \(shouldShow)")
-        } else {
-            // Fallback: If we can't determine screens, hide to be safe
-            shouldShow = false
+        if let pid = pidUnder, let app = NSRunningApplication(processIdentifier: pid), let bundleId = app.bundleIdentifier {
+            
+            // A. Whitelist Safe Apps (Always Hide)
+            if isSafeBundle(bundleId) { 
+                updateOverlay(show: false, reason: "SafeBundle")
+                return 
+            }
+            
+            // B. Dock / Mission Control Heuristic
+            if bundleId == "com.apple.dock" {
+                if isCursorInDockArea(cursorPoint, screens: screens) {
+                    updateOverlay(show: false, reason: "DockBar")
+                    return
+                } else {
+                    // Dock process in center -> Mission Control
+                    updateOverlay(show: true, reason: "MissionControl")
+                    return
+                }
+            }
+            
+            // C. Active App Interaction
+            if let active = activeApp, pid == active.processIdentifier {
+                updateOverlay(show: false, reason: "HoveringActiveApp")
+                return
+            }
         }
         
-        DispatchQueue.main.async { [weak self] in
-            // Only update visibility if we are NOT in the middle of a click-animation
-            // (heuristic: if alpha is < 1, we might be fading out)
-            // But simpler: just set it. If we overlap with animation, the next frame fixes it.
-            // Check if we need to 'reset' the lock icon if it was shown again
+        // ---------------------------------------------------------
+        // PHASE 3: GEOMETRY CHECK (Fallback)
+        // ---------------------------------------------------------
+        // If PID failed or mismatch, check geometry
+        
+        if let activeWindowFrame = windowDetector.getActiveWindowFrame() {
+            let cocoaActiveWindowFrame = CGRect(
+                x: activeWindowFrame.origin.x,
+                y: primaryScreenHeight - (activeWindowFrame.origin.y + activeWindowFrame.height),
+                width: activeWindowFrame.width,
+                height: activeWindowFrame.height
+            )
             
+            // Relaxed geometry (padding)
+            let relaxedFrame = cocoaActiveWindowFrame.insetBy(dx: -5, dy: -5)
+            if NSPointInRect(cursorPoint, relaxedFrame) {
+                 updateOverlay(show: false, reason: "GeometryMatch")
+                 return
+            }
+        }
+        
+        // ---------------------------------------------------------
+        // PHASE 4: VISUAL OVERRIDE (Last Resort)
+        // ---------------------------------------------------------
+        
+        if isCursorOverActiveAppWindow(cursorPoint, primaryHeight: primaryScreenHeight) {
+            updateOverlay(show: false, reason: "VisualOverride")
+            return
+        }
+
+        // ---------------------------------------------------------
+        // PHASE 5: UNSAFE (Show Lock)
+        // ---------------------------------------------------------
+        updateOverlay(show: true, reason: "Verdict:Unsafe")
+    }
+    
+    // MARK: - Helpers
+    
+    private func updateOverlay(show: Bool, reason: String) {
+        DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             
-            if shouldShow {
-                // Always call show() to ensure alpha is reset if we interrupted an animation
-                self.overlay.setLocked(true) 
-                self.overlay.show()
+            if show {
+                if !self.overlay.isVisible || !self.overlay.isLockedState {
+                    // Logger.shared.log("[DECISION] SHOW -> \(reason)")
+                    self.overlay.setLocked(true)
+                    self.overlay.show()
+                }
+                self.overlay.updatePosition(to: NSEvent.mouseLocation)
             } else {
-                // Only hide if we aren't already animating handled by click
-                // But generally safe to just call hide (non-animated) if we moved back to safe zone
-                if self.overlay.isVisible && self.overlay.alphaValue > 0.9 {
-                     self.overlay.hide(animated: false)
+                if self.overlay.isVisible {
+                    // Logger.shared.log("[DECISION] HIDE -> \(reason)")
+                    self.overlay.hide(animated: false)
                 }
             }
         }
     }
     
-    private func setOverlay(visible: Bool) {
-        // Deprecated by direct logic above, but keeping if needed for refactor
-        if visible {
-            overlay.show()
-        } else {
-            overlay.hide()
+    private func isCursorInMenuBar(_ point: CGPoint, screens: [NSScreen]) -> Bool {
+        for screen in screens {
+            if NSPointInRect(point, screen.frame) {
+                if point.y > screen.visibleFrame.maxY {
+                    return true
+                }
+            }
         }
+        return false
     }
+    
+    private func isSafeBundle(_ bundleId: String) -> Bool {
+        let safe = [
+            Bundle.main.bundleIdentifier ?? "com.user.cursoroverlay",
+            "com.apple.finder",
+            "com.apple.WindowManager", // Stage Manager
+            "com.apple.notificationcenterui",
+            "com.apple.controlcenter"
+        ]
+        return safe.contains(bundleId)
+    }
+    
+    private func isCursorInDockArea(_ point: CGPoint, screens: [NSScreen]) -> Bool {
+        guard let screen = screens.first(where: { NSPointInRect(point, $0.frame) }) else { return false }
+        let relX = point.x - screen.frame.minX
+        let relY = point.y - screen.frame.minY
+        let margin: CGFloat = 100 
+        
+        return relY < margin || relX < margin || relX > (screen.frame.width - margin)
+    }
+
+    private func isCursorOverActiveAppWindow(_ cursor: CGPoint, primaryHeight: CGFloat) -> Bool {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return false }
+        let pid = app.processIdentifier
+        
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return false
+        }
+        
+        for entry in list {
+            guard let ownerPID = entry[kCGWindowOwnerPID as String] as? Int,
+                  ownerPID == Int(pid) else { continue }
+            
+            guard let boundsDict = entry[kCGWindowBounds as String] as? [String: Any],
+                  let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) else { continue }
+            
+            // Convert CGWindowList bounds (Top-Left) to Cocoa (Bottom-Left)
+            // Cocoa Y = PrimaryHeight - (CG_Y + CG_Height)
+            let cocoaFrame = CGRect(
+                x: bounds.origin.x,
+                y: primaryHeight - (bounds.origin.y + bounds.height),
+                width: bounds.width,
+                height: bounds.height
+            )
+            
+            if NSPointInRect(cursor, cocoaFrame) {
+                return true
+            }
+        }
+        
+        return false
+    }
+
+
 }

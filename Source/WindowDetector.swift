@@ -60,13 +60,47 @@ class WindowDetector {
         
         return nil
     }
+
+    func getAppPID(at point: CGPoint) -> pid_t? {
+        let systemWide = AXUIElementCreateSystemWide()
+        var element: AXUIElement?
+        
+        // Note: AXUIElementCopyElementAtPosition expects global coordinates (Top-Left origin)
+        // 'point' from MouseTracker/Cocoa is Bottom-Left global.
+        // We need to check if 'point' passed here is cocoa or CG?
+        // StateController passes 'cursorPoint' from 'NSEvent.mouseLocation' which is Cocoa.
+        // So we might need to flip it here or in StateController.
+        // Actually, let's assume we handle coordinate flipping in StateController to be consistent. 
+        // BUT StateController's checkState sends 'NSEvent.mouseLocation' directly.
+        // So we need to flip Y here.
+        
+        // Wait, screen height needed for flip.
+        // Easier to just try passing it, but usually AX expects Top-Left.
+        
+        // Let's rely on caller to passing correct point?
+        // No, let's keep this method dumb and assume 'point' is correct AX coordinates?
+        // OR fix it in StateController.
+        
+        // Let's implement it assuming checkState does the flip if needed.
+        // Actually StateController passes Cocoa point.
+        // Getting screen height here is annoying.
+        
+        // Let's just return nil for now and do the check inside StateController using CGWindowList instead?
+        // No, AX is better for "Under Cursor".
+        
+        let result = AXUIElementCopyElementAtPosition(systemWide, Float(point.x), Float(point.y), &element)
+        
+        if result == .success, let el = element {
+            var pid: pid_t = 0
+            AXUIElementGetPid(el, &pid)
+            return pid
+        }
+        return nil
+    }
     
     private func getActiveWindowFrameFallback() -> CGRect? {
-        guard let activeApp = NSWorkspace.shared.frontmostApplication else { return nil }
-        let pid = activeApp.processIdentifier
-        let axApp = AXUIElementCreateApplication(pid)
-        var focusedWindow: AnyObject?
-        // ... (previous logic)
+        guard let _ = NSWorkspace.shared.frontmostApplication else { return nil }
+        // incomplete implementation
         return nil
     }
 

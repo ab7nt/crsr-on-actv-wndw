@@ -7,12 +7,17 @@ class OverlayIndicator: NSWindow {
     private let size: CGFloat = 20.0 
     
     // Offsets
-    private let lockedOffset = CGPoint(x: 2, y: -6)
-    private let unlockedOffset = CGPoint(x: 4, y: -6) // Shift right when open
+    private let lockedOffset = CGPoint(x: 3, y: -6)
+    private let unlockedOffset = CGPoint(x: 5, y: -6) // Shift right when open
     
     private var imageView: NSImageView!
-    private var isLocked: Bool = true
+    private(set) var isLocked: Bool = true
     private var lastCursorLocation: CGPoint = .zero
+    
+    // Public getter for compatibility if needed, though private(set) handles read access
+    var isLockedState: Bool {
+        return isLocked
+    }
     
     init() {
         let frame = NSRect(x: 0, y: 0, width: size, height: size)
