@@ -5,6 +5,7 @@ class StateController: MouseTrackerDelegate {
     private let mouseTracker: MouseTracker
     private let windowDetector: WindowDetector
     private let overlay: OverlayIndicator
+    private var swipeTracker: SwipeTracker?
     
     // Throttling to prevent excessive Accessibility API calls (expensive)
     private var lastCheckTime: TimeInterval = 0
@@ -14,7 +15,34 @@ class StateController: MouseTrackerDelegate {
     private var isEnabled = true
     private var clickMonitor: Any?
     
+    // User Preferences
+    var isSpacesSwipeEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "EnableSpacesSwipe") }
+        set { UserDefaults.standard.set(newValue, forKey: "EnableSpacesSwipe") }
+    }
+    
+    var isOverlayEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "EnableOverlay") }
+        set { 
+            UserDefaults.standard.set(newValue, forKey: "EnableOverlay")
+            if !newValue {
+                // Immediately hide if disabled
+                DispatchQueue.main.async { [weak self] in
+                    self?.overlay.hide(animated: false)
+                }
+            }
+        }
+    }
+    
     init() {
+        // Default to true if not set
+        if UserDefaults.standard.object(forKey: "EnableSpacesSwipe") == nil {
+            UserDefaults.standard.set(true, forKey: "EnableSpacesSwipe")
+        }
+        if UserDefaults.standard.object(forKey: "EnableOverlay") == nil {
+            UserDefaults.standard.set(true, forKey: "EnableOverlay")
+        }
+        
         Logger.shared.log("App Started. Check Permissions: \(WindowDetector.isAccessibilityTrusted())")
         self.mouseTracker = MouseTracker()
         self.windowDetector = WindowDetector()
@@ -25,13 +53,43 @@ class StateController: MouseTrackerDelegate {
         setupMenu()
         setupClickMonitoring()
         setupSpaceObserver()
+        setupGestures()
     }
     
     deinit {
+        swipeTracker = nil // Stop monitoring
         if let monitor = clickMonitor {
             NSEvent.removeMonitor(monitor)
         }
         NSWorkspace.shared.notificationCenter.removeObserver(self)
+    }
+
+    private func setupGestures() {
+        Logger.shared.log("Initializing Gesture Support...")
+        self.swipeTracker = SwipeTracker()
+        
+        self.swipeTracker?.onSwipe = { [weak self] direction in
+            guard let self = self else { return }
+            guard self.isSpacesSwipeEnabled else { return }
+            
+            // Handle Horizontal Swipes (Left/Right)
+            guard direction == .left || direction == .right else { return }
+            
+            // Get active window
+            guard self.windowDetector.getActiveWindowID() != nil else {
+                return
+            }
+            
+            // Logger.shared.log("[StateController] ✅ Found Active Window ID: \(windowID). Attempting move handling...")
+            
+            if direction == .left {
+                // Move Window to Next Display
+                DisplayMover.shared.moveActiveWindowToNextDisplay()
+            } else if direction == .right {
+                // Move Window to Previous Display
+                DisplayMover.shared.moveActiveWindowToPrevDisplay()
+            }
+        }
     }
     
     private func setupSpaceObserver() {
@@ -113,6 +171,9 @@ class StateController: MouseTrackerDelegate {
     }
     
     private func checkState(at cursorPoint: CGPoint) {
+        // If overlay feature is disabled, skip checks
+        guard isOverlayEnabled else { return }
+
         // If accessibility isn't enabled, we can't do anything meaningful
         guard WindowDetector.isAccessibilityTrusted() else { return }
         
@@ -247,11 +308,12 @@ class StateController: MouseTrackerDelegate {
     
     private func isCursorInDockArea(_ point: CGPoint, screens: [NSScreen]) -> Bool {
         guard let screen = screens.first(where: { NSPointInRect(point, $0.frame) }) else { return false }
-        let relX = point.x - screen.frame.minX
-        let relY = point.y - screen.frame.minY
-        let margin: CGFloat = 100 
         
-        return relY < margin || relX < margin || relX > (screen.frame.width - margin)
+        // Reliable check: The Dock resides in the exclusion zone of visibleFrame.
+        // Since 'visibleFrame' describes the available working area (screen minus menu bar and dock),
+        // any point OUTSIDE 'visibleFrame' is either Menu Bar or Dock.
+        // We already checked Menu Bar (Top) in Phase 1, so this catches the Dock (Bottom/Left/Right).
+        return !NSPointInRect(point, screen.visibleFrame)
     }
 
     private func isCursorOverActiveAppWindow(_ cursor: CGPoint, primaryHeight: CGFloat) -> Bool {

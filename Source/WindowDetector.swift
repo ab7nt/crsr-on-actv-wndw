@@ -1,6 +1,10 @@
 import Cocoa
 import ApplicationServices
 
+// Access the Private _AXUIElementGetWindow function
+@_silgen_name("_AXUIElementGetWindow")
+func _AXUIElementGetWindow(_ element: AXUIElement, _ id: UnsafeMutablePointer<CGWindowID>) -> AXError
+
 struct WindowInfo {
     let appName: String
     let frame: CGRect
@@ -19,6 +23,40 @@ class WindowDetector {
         AXIsProcessTrustedWithOptions(options as CFDictionary)
     }
     
+    
+    /// Returns the Window ID (CGWindowID) of the currently focused window
+    func getActiveWindowID() -> CGWindowID? {
+        // ... implementation above ...
+        // We will keep this for ID retrieval if needed
+        guard let element = getActiveWindowElement() else { return nil }
+        
+        var windowWait: CGWindowID = 0
+        let result = _AXUIElementGetWindow(element, &windowWait)
+        if result == .success {
+             return windowWait
+        }
+        return nil
+    }
+
+    /// Returns the AXUIElement of the currently focused window
+    func getActiveWindowElement() -> AXUIElement? {
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedApp: AnyObject?
+        
+        guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedApplicationAttribute as CFString, &focusedApp) == .success,
+              let axApp = focusedApp as! AXUIElement? else {
+            return nil
+        }
+        
+        var focusedWindow: AnyObject?
+        guard AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focusedWindow) == .success,
+              let windowElement = focusedWindow as! AXUIElement? else {
+            return nil
+        }
+        
+        return windowElement
+    }
+
     /// Returns the Frame of the currently focused window using Accessibility API
     /// This handles Spotlight, Alfred, Siri etc. correctly as they take keyboard focus
     func getActiveWindowFrame() -> CGRect? {

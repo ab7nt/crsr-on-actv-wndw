@@ -25,9 +25,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         launchAtLoginItem.state = LaunchManager.shared.isLaunchAtLoginEnabled ? .on : .off
         menu.addItem(launchAtLoginItem)
         
+        // Swipe Toggle
+        if let controller = stateController {
+            let swipeItem = NSMenuItem(title: "Enable Window Swipes (Cmd + Scroll)", action: #selector(toggleSwipes), keyEquivalent: "")
+            swipeItem.state = controller.isSpacesSwipeEnabled ? .on : .off
+            menu.addItem(swipeItem)
+            
+            let overlayItem = NSMenuItem(title: "Show Safety Lock", action: #selector(toggleOverlay), keyEquivalent: "")
+            overlayItem.state = controller.isOverlayEnabled ? .on : .off
+            menu.addItem(overlayItem)
+        }
+        
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
         statusItem?.menu = menu
+    }
+    @objc func toggleSwipes(_ sender: NSMenuItem) {
+        guard let controller = stateController else { return }
+        let newState = !controller.isSpacesSwipeEnabled
+        controller.isSpacesSwipeEnabled = newState
+        sender.state = newState ? .on : .off
+    }
+    
+    @objc func toggleOverlay(_ sender: NSMenuItem) {
+        guard let controller = stateController else { return }
+        let newState = !controller.isOverlayEnabled
+        controller.isOverlayEnabled = newState
+        sender.state = newState ? .on : .off
     }
     
     @objc func toggleLaunchAtLogin(_ sender: NSMenuItem) {
