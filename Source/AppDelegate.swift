@@ -39,7 +39,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Swipe Toggle
         if let controller = stateController {
-            let swipeItem = NSMenuItem(title: "Enable Window Swipes (Cmd + Scroll)", action: #selector(toggleSwipes), keyEquivalent: "")
+            let swipeItem = NSMenuItem(title: "Swipe to another screen", action: #selector(toggleSwipes), keyEquivalent: "")
+            
+            // Stylize the shortcut hint to look like system gray text
+            let title = "Swipe to another screen"
+            let shortcut = "⌘ + Scroll"
+            let attributed = NSMutableAttributedString(string: "\(title)   \(shortcut)")
+            attributed.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: NSRange(location: title.count + 3, length: shortcut.count))
+            attributed.addAttribute(.font, value: NSFont.menuFont(ofSize: 0), range: NSRange(location: 0, length: attributed.length))
+            swipeItem.attributedTitle = attributed
+            
             swipeItem.state = controller.isSpacesSwipeEnabled ? .on : .off
             menu.addItem(swipeItem)
             

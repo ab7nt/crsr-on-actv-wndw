@@ -12,6 +12,10 @@
                 "Source/WindowDetector.swift",
                 "Source/OverlayIndicator.swift",
                 "Source/StateController.swift",
+                "Source/SwipeTracker.swift",
+                "Source/DisplayMover.swift",
+                "Source/SpacesSupport.swift",
+                "Source/Logger.swift",
                 "-o",
                 "CursorOverlay"
             ],
