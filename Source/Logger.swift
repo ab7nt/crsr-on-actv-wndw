@@ -3,7 +3,7 @@ import os.log
 
 class Logger {
     static let shared = Logger()
-    private let osLog = OSLog(subsystem: "com.user.cursoroverlay", category: "Application")
+    private let osLog = OSLog(subsystem: "com.user.absentweaks", category: "Application")
     
     // Simple console logging for debugging if needed
     func log(_ message: String) {

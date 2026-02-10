@@ -87,11 +87,11 @@ class LaunchManager {
     
     private var plistPath: URL {
         let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first!
-        return library.appendingPathComponent("LaunchAgents/com.user.cursoroverlay.plist")
+        return library.appendingPathComponent("LaunchAgents/com.user.absentweaks.plist")
     }
     
     private func enableLaunchAtLogin() {
-        let appPath = Bundle.main.bundlePath + "/Contents/MacOS/CursorOverlay"
+        let appPath = Bundle.main.bundlePath + "/Contents/MacOS/Absentweaks"
         
         let plistContent = """
         <?xml version="1.0" encoding="UTF-8"?>
@@ -99,7 +99,7 @@ class LaunchManager {
         <plist version="1.0">
         <dict>
             <key>Label</key>
-            <string>com.user.cursoroverlay</string>
+            <string>com.user.absentweaks</string>
             <key>ProgramArguments</key>
             <array>
                 <string>\(appPath)</string>

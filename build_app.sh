@@ -1,6 +1,6 @@
 #!/bin/bash
 
-APP_NAME="MyTweks"
+APP_NAME="Absentweaks"
 SOURCE_DIR="Source"
 BUILD_DIR="Build"
 APP_BUNDLE="${APP_NAME}.app"
@@ -50,7 +50,7 @@ cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
     <key>CFBundleExecutable</key>
     <string>${APP_NAME}</string>
     <key>CFBundleIdentifier</key>
-    <string>com.mytweks.app</string>
+    <string>com.user.absentweaks</string>
     <key>CFBundleName</key>
     <string>${APP_NAME}</string>
     <key>CFBundleDisplayName</key>

@@ -207,19 +207,7 @@ class StateController: MouseTrackerDelegate {
                 return 
             }
             
-            // B. Dock / Mission Control Heuristic
-            if bundleId == "com.apple.dock" {
-                if isCursorInDockArea(cursorPoint, screens: screens) {
-                    updateOverlay(show: false, reason: "DockBar")
-                    return
-                } else {
-                    // Dock process in center -> Mission Control
-                    updateOverlay(show: true, reason: "MissionControl")
-                    return
-                }
-            }
-            
-            // C. Active App Interaction
+            // B. Active App Interaction (Consolidated)
             if let active = activeApp, pid == active.processIdentifier {
                 updateOverlay(show: false, reason: "HoveringActiveApp")
                 return
@@ -254,6 +242,13 @@ class StateController: MouseTrackerDelegate {
         if isCursorOverActiveAppWindow(cursorPoint, primaryHeight: primaryScreenHeight) {
             updateOverlay(show: false, reason: "VisualOverride")
             return
+        }
+        
+        // Check for Dock Visual Auto-Hide Override
+        // This catches the Dock when it is popped up (Auto-Sized) even if AX fails
+        if isCursorOverDock(cursorPoint, primaryHeight: primaryScreenHeight) {
+             updateOverlay(show: false, reason: "DockVisual")
+             return
         }
 
         // ---------------------------------------------------------
@@ -297,11 +292,12 @@ class StateController: MouseTrackerDelegate {
     
     private func isSafeBundle(_ bundleId: String) -> Bool {
         let safe = [
-            Bundle.main.bundleIdentifier ?? "com.user.cursoroverlay",
+            Bundle.main.bundleIdentifier ?? "com.user.absentweaks",
             "com.apple.finder",
             "com.apple.WindowManager", // Stage Manager
             "com.apple.notificationcenterui",
-            "com.apple.controlcenter"
+            "com.apple.controlcenter",
+            "com.apple.dock" // Dock, Launchpad, Mission Control
         ]
         return safe.contains(bundleId)
     }
@@ -349,5 +345,42 @@ class StateController: MouseTrackerDelegate {
         return false
     }
 
+    private func isCursorOverDock(_ cursor: CGPoint, primaryHeight: CGFloat) -> Bool {
+        let apps = NSWorkspace.shared.runningApplications
+        guard let dockApp = apps.first(where: { $0.bundleIdentifier == "com.apple.dock" }) else { return false }
+        let pid = dockApp.processIdentifier
+        
+        // Note: We MUST include Desktop elements to see the Dock, but filter out the Wallpaper later.
+        let options: CGWindowListOption = [.optionOnScreenOnly] 
+        guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return false
+        }
+        
+        for entry in list {
+            guard let ownerPID = entry[kCGWindowOwnerPID as String] as? Int,
+                  ownerPID == Int(pid) else { continue }
+            
+            
+            // Filter out the Desktop Wallpaper (usually Layer < 0 or specific names)
+            // The Dock itself is usually Layer 20 or similar (kCGBackstopMenuLevel)
+            guard let layer = entry[kCGWindowLayer as String] as? Int, layer > 0 else { continue }
+            
+            guard let boundsDict = entry[kCGWindowBounds as String] as? [String: Any],
+                  let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) else { continue }
+            
+            let cocoaFrame = CGRect(
+                x: bounds.origin.x,
+                y: primaryHeight - (bounds.origin.y + bounds.height),
+                width: bounds.width,
+                height: bounds.height
+            )
+            
+            if NSPointInRect(cursor, cocoaFrame) {
+                // Logger.shared.log("Cursor OVER Dock Window! Layer=\(layer)")
+                return true
+            }
+        }
+        return false
+    }
 
 }
