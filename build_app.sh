@@ -33,12 +33,23 @@ echo "📦 Bundling into ${APP_BUNDLE}..."
 mkdir -p "$MACOS_DIR"
 mkdir -p "$RESOURCES_DIR"
 
+# Generate icons if script and source exist
+if [ -f "generate_icons.sh" ] && [ -f "Assets/icon.png" ]; then
+    echo "🎨 Generating icons..."
+    ./generate_icons.sh
+fi
+
 # Move binary
 mv "$APP_NAME" "$MACOS_DIR/"
 
 # Copy Icon if exists
 if [ -f "Assets/AppIcon.icns" ]; then
     cp "Assets/AppIcon.icns" "${RESOURCES_DIR}/AppIcon.icns"
+fi
+
+# Copy MenuBarIcon if exists (for status bar)
+if [ -f "Assets/MenuBarIcon.png" ]; then
+    cp "Assets/MenuBarIcon.png" "${RESOURCES_DIR}/MenuBarIcon.png"
 fi
 
 # Create Info.plist
@@ -71,6 +82,9 @@ PLIST
 
 # Create PkgInfo
 echo "APPL????" > "${CONTENTS_DIR}/PkgInfo"
+
+# Touch the app to force Finder update
+touch "$APP_BUNDLE"
 
 echo "✅ Done! Application is ready at ./${APP_BUNDLE}"
 echo "   To run: open ${APP_BUNDLE}"

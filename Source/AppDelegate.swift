@@ -15,8 +15,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func setupStatusBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem?.button {
-            // Using lock.circle to match the app theme
-            button.image = NSImage(systemSymbolName: "lock.circle", accessibilityDescription: "Cursor overlay")
+            // Prioritize a dedicated "MenuBarIcon" if available, otherwise use AppIcon as template
+            if let menuImage = NSImage(named: "MenuBarIcon") {
+                menuImage.size = NSSize(width: 18, height: 18)
+                menuImage.isTemplate = true
+                button.image = menuImage
+            } else if let appIcon = NSImage(named: "AppIcon") {
+                // Resize and force template mode (system color)
+                let icon = appIcon.copy() as! NSImage
+                icon.size = NSSize(width: 18, height: 18)
+                icon.isTemplate = true
+                button.image = icon
+            } else {
+                button.image = NSImage(systemSymbolName: "lock.circle", accessibilityDescription: "Cursor overlay")
+            }
         }
         
         let menu = NSMenu()

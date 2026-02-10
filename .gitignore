@@ -18,6 +18,10 @@ CursorOverlay.app/
 Absentweaks
 Absentweaks.app/
 MyTweks
+
+# Generated Assets
+Assets/AppIcon.icns
+Assets/AppIcon.iconset/
 MyTweks.app/
 *.o
 *.d
