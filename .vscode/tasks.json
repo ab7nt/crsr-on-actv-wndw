@@ -15,6 +15,7 @@
                 "Source/SwipeTracker.swift",
                 "Source/DisplayMover.swift",
                 "Source/SpacesSupport.swift",
+                "Source/TrackpadListener.swift",
                 "Source/Logger.swift",
                 "-o",
                 "CursorOverlay"

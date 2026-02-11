@@ -15,19 +15,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func setupStatusBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem?.button {
-            // Prioritize a dedicated "MenuBarIcon" if available, otherwise use AppIcon as template
+            // Revert to original simple logic which worked
             if let menuImage = NSImage(named: "MenuBarIcon") {
                 menuImage.size = NSSize(width: 18, height: 18)
                 menuImage.isTemplate = true
                 button.image = menuImage
             } else if let appIcon = NSImage(named: "AppIcon") {
-                // Resize and force template mode (system color)
                 let icon = appIcon.copy() as! NSImage
                 icon.size = NSSize(width: 18, height: 18)
                 icon.isTemplate = true
                 button.image = icon
             } else {
-                button.image = NSImage(systemSymbolName: "lock.circle", accessibilityDescription: "Cursor overlay")
+                // Fallback system icon so we can at least see it
+                button.image = NSImage(systemSymbolName: "hand.raised.fingers.spread", accessibilityDescription: "Overlay")
+                Logger.shared.log("[StatusBar] Warning: Could not find MenuBarIcon or AppIcon. Using system fallback.")
             }
         }
         
@@ -55,6 +56,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let overlayItem = NSMenuItem(title: "Show Safety Lock", action: #selector(toggleOverlay), keyEquivalent: "")
             overlayItem.state = controller.isOverlayEnabled ? .on : .off
             menu.addItem(overlayItem)
+
+            let middleClickItem = NSMenuItem(title: "Middle Click (3-Finger Tap)", action: #selector(toggleMiddleClick), keyEquivalent: "")
+            middleClickItem.state = controller.isMiddleClickGestureEnabled ? .on : .off
+            menu.addItem(middleClickItem)
         }
         
         menu.addItem(NSMenuItem.separator())
@@ -72,6 +77,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let controller = stateController else { return }
         let newState = !controller.isOverlayEnabled
         controller.isOverlayEnabled = newState
+        sender.state = newState ? .on : .off
+    }
+
+    @objc func toggleMiddleClick(_ sender: NSMenuItem) {
+        guard let controller = stateController else { return }
+        let newState = !controller.isMiddleClickGestureEnabled
+        controller.isMiddleClickGestureEnabled = newState
         sender.state = newState ? .on : .off
     }
     

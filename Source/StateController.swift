@@ -34,6 +34,19 @@ class StateController: MouseTrackerDelegate {
         }
     }
     
+    var isMiddleClickGestureEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "EnableMiddleClickGesture") }
+        set { 
+            UserDefaults.standard.set(newValue, forKey: "EnableMiddleClickGesture")
+            TrackpadListener.shared.isEnabled = newValue
+            if newValue {
+                TrackpadListener.shared.start()
+            } else {
+                TrackpadListener.shared.stop()
+            }
+        }
+    }
+    
     init() {
         // Default to true if not set
         if UserDefaults.standard.object(forKey: "EnableSpacesSwipe") == nil {
@@ -41,6 +54,9 @@ class StateController: MouseTrackerDelegate {
         }
         if UserDefaults.standard.object(forKey: "EnableOverlay") == nil {
             UserDefaults.standard.set(true, forKey: "EnableOverlay")
+        }
+        if UserDefaults.standard.object(forKey: "EnableMiddleClickGesture") == nil {
+            UserDefaults.standard.set(true, forKey: "EnableMiddleClickGesture")
         }
         
         Logger.shared.log("App Started. Check Permissions: \(WindowDetector.isAccessibilityTrusted())")
@@ -54,14 +70,38 @@ class StateController: MouseTrackerDelegate {
         setupClickMonitoring()
         setupSpaceObserver()
         setupGestures()
+        setupMiddleClick()
     }
     
     deinit {
         swipeTracker = nil // Stop monitoring
+        TrackpadListener.shared.stop()
         if let monitor = clickMonitor {
             NSEvent.removeMonitor(monitor)
         }
         NSWorkspace.shared.notificationCenter.removeObserver(self)
+    }
+
+    private func setupMiddleClick() {
+        TrackpadListener.shared.onThreeFingerTap = {
+            self.simulateMiddleClick()
+        }
+        if isMiddleClickGestureEnabled {
+            TrackpadListener.shared.isEnabled = true
+            TrackpadListener.shared.start()
+        }
+    }
+
+    private func simulateMiddleClick() {
+        guard let source = CGEventSource(stateID: .hidSystemState) else { return }
+        // Use current cursor position directly from CoreGraphics (Global coordinates)
+        let point = CGEvent(source: nil)?.location ?? .zero
+        
+        if let mouseDown = CGEvent(mouseEventSource: source, mouseType: .otherMouseDown, mouseCursorPosition: point, mouseButton: .center),
+           let mouseUp = CGEvent(mouseEventSource: source, mouseType: .otherMouseUp, mouseCursorPosition: point, mouseButton: .center) {
+            mouseDown.post(tap: .cghidEventTap)
+            mouseUp.post(tap: .cghidEventTap)
+        }
     }
 
     private func setupGestures() {

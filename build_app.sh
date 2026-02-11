@@ -21,6 +21,7 @@ swiftc ${SOURCE_DIR}/main.swift \
        ${SOURCE_DIR}/SwipeTracker.swift \
        ${SOURCE_DIR}/OverlayIndicator.swift \
        ${SOURCE_DIR}/StateController.swift \
+       ${SOURCE_DIR}/TrackpadListener.swift \
        ${SOURCE_DIR}/Logger.swift \
        -o "$APP_NAME"
 
