@@ -15,6 +15,7 @@ rm -f "$APP_NAME"
 echo "🏗  Compiling..."
 swiftc ${SOURCE_DIR}/main.swift \
        ${SOURCE_DIR}/AppDelegate.swift \
+       ${SOURCE_DIR}/AppUI.swift \
        ${SOURCE_DIR}/MouseTracker.swift \
        ${SOURCE_DIR}/WindowDetector.swift \
        ${SOURCE_DIR}/DisplayMover.swift \
@@ -50,7 +51,9 @@ fi
 
 # Copy MenuBarIcon if exists (for status bar)
 if [ -f "Assets/MenuBarIcon.png" ]; then
-    cp "Assets/MenuBarIcon.png" "${RESOURCES_DIR}/MenuBarIcon.png"
+    echo "⚙️  Resizing MenuBarIcon to 36x36 for Status Bar..."
+    # Resize to 36x36 (Retina @2x for 18pt) to ensure it renders crisply and correct scale
+    sips -z 36 36 "Assets/MenuBarIcon.png" --out "${RESOURCES_DIR}/MenuBarIcon.png" > /dev/null
 fi
 
 # Create Info.plist
@@ -73,8 +76,6 @@ cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
     <string>1.0</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
-    <key>LSUIElement</key>
-    <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>

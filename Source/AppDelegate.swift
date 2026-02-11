@@ -1,104 +1,189 @@
 import Cocoa
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     
     var stateController: StateController?
+    var window: NSWindow!
+    var settingsViewController: SettingsViewController!
     var statusItem: NSStatusItem?
 
+    // Preference Key
+    private let kHideDockIcon = "HideDockIcon"
+
     func applicationDidFinishLaunching(_ aNotification: Notification) {
-        // Initialize the core logic
+        // 1. Initialize logic
         stateController = StateController()
+        Logger.shared.log("[App] StateController initialized.")
         
-        setupStatusBar()
+        // 2. Setup Main Window
+        setupMainWindow()
+        
+        // 3. Setup Status Item
+        setupStatusItem()
+        
+        // 4. Update Dock Icon State
+        updateActivationPolicy()
     }
     
-    func setupStatusBar() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    func setupStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem?.button {
-            // Revert to original simple logic which worked
-            if let menuImage = NSImage(named: "MenuBarIcon") {
-                menuImage.size = NSSize(width: 18, height: 18)
-                menuImage.isTemplate = true
-                button.image = menuImage
-            } else if let appIcon = NSImage(named: "AppIcon") {
-                let icon = appIcon.copy() as! NSImage
-                icon.size = NSSize(width: 18, height: 18)
-                icon.isTemplate = true
-                button.image = icon
-            } else {
-                // Fallback system icon so we can at least see it
-                button.image = NSImage(systemSymbolName: "hand.raised.fingers.spread", accessibilityDescription: "Overlay")
-                Logger.shared.log("[StatusBar] Warning: Could not find MenuBarIcon or AppIcon. Using system fallback.")
+            // Try explicit MenuBarIcon from Resources
+            var iconImage = NSImage(named: "MenuBarIcon")
+            if iconImage == nil {
+                // Try finding by path if bundle lookup fails
+                if let path = Bundle.main.path(forResource: "MenuBarIcon", ofType: "png") {
+                    iconImage = NSImage(contentsOfFile: path)
+                }
             }
+
+            if let img = iconImage {
+                img.isTemplate = true
+                img.size = NSSize(width: 18, height: 18)
+                button.image = img
+            } else {
+                // Fallback: Simple icon: a small circle
+                let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
+                    NSColor.labelColor.setStroke()
+                    let path = NSBezierPath(ovalIn: NSRect(x: 4, y: 4, width: 10, height: 10))
+                    path.lineWidth = 2
+                    path.stroke()
+                    return true
+                }
+                image.isTemplate = true
+                button.image = image
+            }
+            
+            button.action = #selector(statusItemClicked)
+            button.target = self
         }
         
         let menu = NSMenu()
+        menu.delegate = self
+        menu.addItem(NSMenuItem(title: "Settings", action: #selector(showSettings), keyEquivalent: ","))
+        menu.addItem(NSMenuItem.separator())
         
-        let launchAtLoginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
-        launchAtLoginItem.state = LaunchManager.shared.isLaunchAtLoginEnabled ? .on : .off
-        menu.addItem(launchAtLoginItem)
+        // Launch at Login in Menu
+        let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLoginFromMenu(_:)), keyEquivalent: "")
+        menu.addItem(launchItem)
         
-        // Swipe Toggle
-        if let controller = stateController {
-            let swipeItem = NSMenuItem(title: "Swipe to another screen", action: #selector(toggleSwipes), keyEquivalent: "")
-            
-            // Stylize the shortcut hint to look like system gray text
-            let title = "Swipe to another screen"
-            let shortcut = "⌘ + Scroll"
-            let attributed = NSMutableAttributedString(string: "\(title)   \(shortcut)")
-            attributed.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: NSRange(location: title.count + 3, length: shortcut.count))
-            attributed.addAttribute(.font, value: NSFont.menuFont(ofSize: 0), range: NSRange(location: 0, length: attributed.length))
-            swipeItem.attributedTitle = attributed
-            
-            swipeItem.state = controller.isSpacesSwipeEnabled ? .on : .off
-            menu.addItem(swipeItem)
-            
-            let overlayItem = NSMenuItem(title: "Show Safety Lock", action: #selector(toggleOverlay), keyEquivalent: "")
-            overlayItem.state = controller.isOverlayEnabled ? .on : .off
-            menu.addItem(overlayItem)
-
-            let middleClickItem = NSMenuItem(title: "Middle Click (3-Finger Tap)", action: #selector(toggleMiddleClick), keyEquivalent: "")
-            middleClickItem.state = controller.isMiddleClickGestureEnabled ? .on : .off
-            menu.addItem(middleClickItem)
-        }
+        let hideItem = NSMenuItem(title: "Hide Dock Icon", action: #selector(toggleDockIconFromMenu(_:)), keyEquivalent: "")
+        menu.addItem(hideItem)
         
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem?.menu = menu
     }
-    @objc func toggleSwipes(_ sender: NSMenuItem) {
-        guard let controller = stateController else { return }
-        let newState = !controller.isSpacesSwipeEnabled
-        controller.isSpacesSwipeEnabled = newState
-        sender.state = newState ? .on : .off
-    }
     
-    @objc func toggleOverlay(_ sender: NSMenuItem) {
-        guard let controller = stateController else { return }
-        let newState = !controller.isOverlayEnabled
-        controller.isOverlayEnabled = newState
-        sender.state = newState ? .on : .off
+    func menuWillOpen(_ menu: NSMenu) {
+         if let launchItem = menu.items.first(where: { $0.action == #selector(toggleLaunchAtLoginFromMenu(_:)) }) {
+             launchItem.state = LaunchManager.shared.isLaunchAtLoginEnabled ? .on : .off
+         }
+         if let hideItem = menu.items.first(where: { $0.action == #selector(toggleDockIconFromMenu(_:)) }) {
+             hideItem.state = isDockIconHidden ? .on : .off
+         }
     }
 
-    @objc func toggleMiddleClick(_ sender: NSMenuItem) {
-        guard let controller = stateController else { return }
-        let newState = !controller.isMiddleClickGestureEnabled
-        controller.isMiddleClickGestureEnabled = newState
-        sender.state = newState ? .on : .off
-    }
-    
-    @objc func toggleLaunchAtLogin(_ sender: NSMenuItem) {
-        let newState = !LaunchManager.shared.isLaunchAtLoginEnabled
-        LaunchManager.shared.isLaunchAtLoginEnabled = newState
-        sender.state = newState ? .on : .off
-    }
-    
-    @objc func quit() {
-        NSApplication.shared.terminate(nil)
+    @objc func toggleLaunchAtLoginFromMenu(_ sender: NSMenuItem) {
+        LaunchManager.shared.isLaunchAtLoginEnabled = (sender.state == .off)
+        settingsViewController?.refresh()
     }
 
+    @objc func toggleDockIconFromMenu(_ sender: NSMenuItem) {
+        setDockIconHidden(sender.state == .off)
+        settingsViewController?.refresh()
+    }
+    
+    @objc func statusItemClicked() {
+        statusItem?.button?.performClick(nil)
+    }
+    
+    @objc func showSettings() {
+        NSApp.activate(ignoringOtherApps: true)
+        if window == nil {
+            setupMainWindow()
+        }
+        window.makeKeyAndOrderFront(nil)
+    }
+    
+    func updateActivationPolicy() {
+        let shouldHide = UserDefaults.standard.bool(forKey: kHideDockIcon)
+        let currentPolicy = NSApp.activationPolicy()
+        
+        if shouldHide {
+            if currentPolicy != .accessory {
+                NSApp.setActivationPolicy(.accessory)
+            }
+        } else {
+            if currentPolicy != .regular {
+                NSApp.setActivationPolicy(.regular)
+            }
+        }
+        
+        DispatchQueue.main.async {
+            if !shouldHide && self.window != nil && self.window.isVisible {
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        }
+    }
+    
+    func setDockIconHidden(_ hidden: Bool) {
+        UserDefaults.standard.set(hidden, forKey: kHideDockIcon)
+        updateActivationPolicy()
+    }
+    
+    var isDockIconHidden: Bool {
+        return UserDefaults.standard.bool(forKey: kHideDockIcon)
+    }
+
+    func setupMainWindow() {
+        let windowSize = NSSize(width: 420, height: 450)
+        let screenSize = NSScreen.main?.frame.size ?? .zero
+        let rect = NSRect(x: (screenSize.width - windowSize.width) / 2,
+                          y: (screenSize.height - windowSize.height) / 2,
+                          width: windowSize.width,
+                          height: windowSize.height)
+        
+        window = NSWindow(contentRect: rect,
+                          styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+                          backing: .buffered,
+                          defer: false)
+        window.title = "Absentweaks"
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        
+        // Dark theme 
+        window.backgroundColor = NSColor(red: 20/255.0, green: 22/255.0, blue: 36/255.0, alpha: 1.0)
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        
+        // Уменьшенная высота окна
+        window.minSize = NSSize(width: 420, height: 500)
+        window.maxSize = NSSize(width: 420, height: 500)
+        
+        settingsViewController = SettingsViewController()
+        settingsViewController.stateController = stateController
+        
+        window.contentViewController = settingsViewController
+        window.makeKeyAndOrderFront(nil)
+    }
+    
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        return false
+    }
+    
+    func applicationDidBecomeActive(_ notification: Notification) {
+        if window != nil {
+            window.makeKeyAndOrderFront(nil)
+        }
+    }
+    
     func applicationWillTerminate(_ aNotification: Notification) {
-        // Tear down
+    }
+    
+    // Window delegate method not strictly needed if isReleasedWhenClosed = false and we reuse the window
+    func windowWillClose(_ notification: Notification) {
+        // Do nothing, window is hidden but instance preserved
     }
 }
 

@@ -86,9 +86,13 @@ class StateController: MouseTrackerDelegate {
         TrackpadListener.shared.onThreeFingerTap = {
             self.simulateMiddleClick()
         }
+        
+        // Start listener on background queue to avoid blocking main thread during app launch
         if isMiddleClickGestureEnabled {
-            TrackpadListener.shared.isEnabled = true
-            TrackpadListener.shared.start()
+            DispatchQueue.global(qos: .userInitiated).async {
+                TrackpadListener.shared.isEnabled = true
+                TrackpadListener.shared.start()
+            }
         }
     }
 
