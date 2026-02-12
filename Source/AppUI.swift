@@ -88,7 +88,7 @@ class SettingsViewController: NSViewController {
         // 2. Swipe window to another screen (Cmd + Scroll)
         mainStack.addArrangedSubview(createSwitchRow(
             title: "Swipe window to another screen",
-            subtitle: "Cmd + Scroll",
+            subtitle: "⌘ + Scroll",
             switchObj: &swipeSwitch,
             action: #selector(toggleSwipe(_:))
         ))

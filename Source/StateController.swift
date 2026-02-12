@@ -224,6 +224,9 @@ class StateController: MouseTrackerDelegate {
         let screens = NSScreen.screens
         guard let primaryScreenHeight = screens.first?.frame.height else { return }
         
+        // Debug Log
+        // Logger.shared.log("CheckState at \(cursorPoint). PrimaryHeight: \(primaryScreenHeight)")
+        
         // ---------------------------------------------------------
         // PHASE 1: SYSTEM UI EXCLUSION (Fastest)
         // ---------------------------------------------------------
@@ -239,6 +242,12 @@ class StateController: MouseTrackerDelegate {
         let pidUnder = windowDetector.getAppPID(at: axCursorPoint)
         let activeApp = NSWorkspace.shared.frontmostApplication
         
+        if let pid = pidUnder, let app = NSRunningApplication(processIdentifier: pid), let _ = app.bundleIdentifier {
+            // Logger.shared.log("Stats: ActiveApp=\(activeApp?.bundleIdentifier ?? "nil"), HoverApp=\(bundle) (PID: \(pid))")
+        } else {
+             // Logger.shared.log("Stats: ActiveApp=\(activeApp?.bundleIdentifier ?? "nil"), HoverPID=\(pidUnder == nil ? "nil" : "\(pidUnder!)") (No Bundle Info)")
+        }
+
         // ---------------------------------------------------------
         // PHASE 2: PID / INTERACTION CHECK (Precision)
         // ---------------------------------------------------------
@@ -247,13 +256,13 @@ class StateController: MouseTrackerDelegate {
             
             // A. Whitelist Safe Apps (Always Hide)
             if isSafeBundle(bundleId) { 
-                updateOverlay(show: false, reason: "SafeBundle")
+                updateOverlay(show: false, reason: "SafeBundle: \(bundleId)")
                 return 
             }
             
             // B. Active App Interaction (Consolidated)
             if let active = activeApp, pid == active.processIdentifier {
-                updateOverlay(show: false, reason: "HoveringActiveApp")
+                updateOverlay(show: false, reason: "HoveringActiveApp: \(bundleId)")
                 return
             }
         }
@@ -306,6 +315,8 @@ class StateController: MouseTrackerDelegate {
     private func updateOverlay(show: Bool, reason: String) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            
+            // Logger.shared.log("[DECISION] \(show ? "SHOW" : "HIDE") -> \(reason)")
             
             if show {
                 if !self.overlay.isVisible || !self.overlay.isLockedState {
@@ -404,13 +415,19 @@ class StateController: MouseTrackerDelegate {
             guard let ownerPID = entry[kCGWindowOwnerPID as String] as? Int,
                   ownerPID == Int(pid) else { continue }
             
-            
             // Filter out the Desktop Wallpaper (usually Layer < 0 or specific names)
             // The Dock itself is usually Layer 20 or similar (kCGBackstopMenuLevel)
             guard let layer = entry[kCGWindowLayer as String] as? Int, layer > 0 else { continue }
             
             guard let boundsDict = entry[kCGWindowBounds as String] as? [String: Any],
                   let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) else { continue }
+            
+            // Ignore Full Screen Dock Windows (Background/Gesture layers)
+            // A real UI Dock strip will be thin in at least one dimension.
+            // If both dimensions are large, it's likely the invisible desktop layer.
+            if bounds.width > 400 && bounds.height > 400 {
+                continue
+            }
             
             let cocoaFrame = CGRect(
                 x: bounds.origin.x,
@@ -420,7 +437,7 @@ class StateController: MouseTrackerDelegate {
             )
             
             if NSPointInRect(cursor, cocoaFrame) {
-                // Logger.shared.log("Cursor OVER Dock Window! Layer=\(layer)")
+                // Logger.shared.log("DockWindow Hit! Layer=\(layer), CocoaFrame=\(cocoaFrame), CGFrame=\(bounds)")
                 return true
             }
         }
