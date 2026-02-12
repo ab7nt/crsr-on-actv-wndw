@@ -16,7 +16,9 @@ class MouseTracker {
         stopTracking()
     }
     
-    private func startTracking() {
+    func startTracking() {
+        guard monitor == nil else { return }
+        
         // Global monitor for when the app is in the background (normal state for this utility)
         let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
         
@@ -31,7 +33,7 @@ class MouseTracker {
         }
     }
     
-    private func stopTracking() {
+    func stopTracking() {
         if let monitor = monitor {
             NSEvent.removeMonitor(monitor)
             self.monitor = nil

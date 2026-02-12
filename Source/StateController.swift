@@ -13,7 +13,9 @@ class StateController: MouseTrackerDelegate {
     private let checkInterval: TimeInterval = 0.05 // ~20 checks per second max
     
     private var isEnabled = true
+    private var isSuspended = false // For when dialogs are open
     private var clickMonitor: Any?
+    private var clickMonitorLocal: Any? // Added separate handle for local
     
     // User Preferences
     var isSpacesSwipeEnabled: Bool {
@@ -38,13 +40,22 @@ class StateController: MouseTrackerDelegate {
         get { UserDefaults.standard.bool(forKey: "EnableMiddleClickGesture") }
         set { 
             UserDefaults.standard.set(newValue, forKey: "EnableMiddleClickGesture")
-            TrackpadListener.shared.isEnabled = newValue
-            if newValue {
-                TrackpadListener.shared.start()
-            } else {
-                TrackpadListener.shared.stop()
-            }
+            updateTrackpadListenerState()
         }
+    }
+
+    var isAppLaunchEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "EnableAppLaunch") }
+        set { 
+            UserDefaults.standard.set(newValue, forKey: "EnableAppLaunch")
+            updateTrackpadListenerState()
+            setupAppLauncher()
+        }
+    }
+    
+    var selectedAppPath: String? {
+        get { UserDefaults.standard.string(forKey: "SelectedAppPath") }
+        set { UserDefaults.standard.set(newValue, forKey: "SelectedAppPath") }
     }
     
     init() {
@@ -70,7 +81,7 @@ class StateController: MouseTrackerDelegate {
         setupClickMonitoring()
         setupSpaceObserver()
         setupGestures()
-        setupMiddleClick()
+        setupTrackpadGestures()
     }
     
     deinit {
@@ -81,19 +92,71 @@ class StateController: MouseTrackerDelegate {
         }
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
+    
+    // MARK: - Trackpad Handling
+    
+    private func setupTrackpadGestures() {
+        TrackpadListener.shared.onThreeFingerTap = { [weak self] in
+            self?.simulateMiddleClick()
+        }
+        setupAppLauncher()
+        updateTrackpadListenerState()
+    }
 
-    private func setupMiddleClick() {
-        TrackpadListener.shared.onThreeFingerTap = {
-            self.simulateMiddleClick()
+    private func setupAppLauncher() {
+         if isAppLaunchEnabled {
+            TrackpadListener.shared.onThreeFingerDoubleTap = { [weak self] in
+                self?.launchSelectedApp()
+            }
+        } else {
+            TrackpadListener.shared.onThreeFingerDoubleTap = nil
+        }
+    }
+
+    private func launchSelectedApp() {
+        guard let path = selectedAppPath else { return }
+        let url = URL(fileURLWithPath: path)
+        NSWorkspace.shared.open(url)
+    }
+    
+    private func updateTrackpadListenerState() {
+        guard !isSuspended else {
+            TrackpadListener.shared.stop()
+            return
         }
         
-        // Start listener on background queue to avoid blocking main thread during app launch
-        if isMiddleClickGestureEnabled {
+        let anyEnabled = isMiddleClickGestureEnabled || isAppLaunchEnabled
+        TrackpadListener.shared.isEnabled = anyEnabled
+        
+        if anyEnabled {
             DispatchQueue.global(qos: .userInitiated).async {
-                TrackpadListener.shared.isEnabled = true
                 TrackpadListener.shared.start()
             }
+        } else {
+            TrackpadListener.shared.stop()
         }
+    }
+    
+    // MARK: - Suspension Logic
+    
+    func suspendForDialog() {
+        Logger.shared.log("Suspending for Dialog...")
+        isSuspended = true
+        TrackpadListener.shared.stop()
+        mouseTracker.stopTracking()
+        swipeTracker?.stop()
+        stopClickMonitoring()
+        overlay.hide(animated: false)
+    }
+    
+    func resumeFromDialog() {
+        Logger.shared.log("Resuming from Dialog...")
+        isSuspended = false
+        updateTrackpadListenerState()
+        mouseTracker.startTracking()
+        swipeTracker?.start()
+        startClickMonitoring()
+        // Overlay will naturally reappear on next mouse move check
     }
 
     private func simulateMiddleClick() {
@@ -165,15 +228,31 @@ class StateController: MouseTrackerDelegate {
     }
     
     private func setupClickMonitoring() {
-        // Monitor Left Clicks globally to provide instant feedback
+        startClickMonitoring()
+    }
+    
+    private func startClickMonitoring() {
+        guard clickMonitor == nil else { return }
+        
         let mask: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown]
         clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
             self?.handleGlobalClick()
         }
         
-        NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+        clickMonitorLocal = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
             self?.handleGlobalClick()
             return event
+        }
+    }
+    
+    private func stopClickMonitoring() {
+        if let m = clickMonitor {
+            NSEvent.removeMonitor(m)
+            clickMonitor = nil
+        }
+        if let m = clickMonitorLocal {
+            NSEvent.removeMonitor(m)
+            clickMonitorLocal = nil
         }
     }
     

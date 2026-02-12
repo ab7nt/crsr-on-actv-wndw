@@ -1,4 +1,5 @@
 import Cocoa
+import UniformTypeIdentifiers
 
 class SettingsViewController: NSViewController {
     
@@ -8,13 +9,15 @@ class SettingsViewController: NSViewController {
     private var lockSwitch: NSSwitch!
     private var swipeSwitch: NSSwitch!
     private var middleClickSwitch: NSSwitch!
+    private var appLaunchSwitch: NSSwitch!
+    private var appSelectionButton: NSButton!
     
     // Checkbox UI Elements
     private var launchCheckbox: NSButton!
     private var dockCheckbox: NSButton!
     
     override func loadView() {
-        self.view = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 500))
+        self.view = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 600))
     }
     
     override func viewDidLoad() {
@@ -29,6 +32,8 @@ class SettingsViewController: NSViewController {
             lockSwitch.state = controller.isOverlayEnabled ? .on : .off
             swipeSwitch.state = controller.isSpacesSwipeEnabled ? .on : .off
             middleClickSwitch.state = controller.isMiddleClickGestureEnabled ? .on : .off
+            appLaunchSwitch.state = controller.isAppLaunchEnabled ? .on : .off
+            updateAppButtonTitle()
         }
         
         // 2. Secondary Settings
@@ -100,6 +105,19 @@ class SettingsViewController: NSViewController {
             switchObj: &middleClickSwitch,
             action: #selector(toggleMiddleClick(_:))
         ))
+        
+        // 4. Open App (3-Finger Double Tap)
+        mainStack.addArrangedSubview(createSwitchRow(
+            title: "Open Application",
+            subtitle: "3-Finger Double Tap",
+            switchObj: &appLaunchSwitch,
+            action: #selector(toggleAppLaunch(_:))
+        ))
+        
+        // App Selection Button
+        appSelectionButton = NSButton(title: "Select App...", target: self, action: #selector(selectApp(_:)))
+        appSelectionButton.bezelStyle = .rounded
+        mainStack.addArrangedSubview(appSelectionButton)
         
         // Отступ перед чекбоксами
         mainStack.addArrangedSubview(createSpacer(height: 15))
@@ -199,6 +217,51 @@ class SettingsViewController: NSViewController {
     
     @objc func toggleMiddleClick(_ sender: NSSwitch) {
         stateController?.isMiddleClickGestureEnabled = (sender.state == .on)
+    }
+
+    @objc func toggleAppLaunch(_ sender: NSSwitch) {
+         stateController?.isAppLaunchEnabled = (sender.state == .on)
+         updateAppButtonTitle()
+    }
+    
+    @objc func selectApp(_ sender: NSButton) {
+        // Suspend heavy listeners to prevent UI lag
+        stateController?.suspendForDialog()
+        
+        // Ensure the app is active so the dialog appears promptly and doesn't lag the UI
+        NSApp.activate(ignoringOtherApps: true)
+        
+        let dialog = NSOpenPanel()
+        dialog.title = "Select Application to Launch"
+        if #available(macOS 11.0, *) {
+            dialog.allowedContentTypes = [.application]
+        } else {
+            dialog.allowedFileTypes = ["app"]
+        }
+        dialog.directoryURL = URL(fileURLWithPath: "/Applications")
+        dialog.canChooseFiles = true
+        dialog.canChooseDirectories = false
+        dialog.treatsFilePackagesAsDirectories = false
+        
+        dialog.begin { response in
+            if response == .OK, let url = dialog.url {
+                self.stateController?.selectedAppPath = url.path
+                self.updateAppButtonTitle()
+            }
+            // Resume listeners
+            self.stateController?.resumeFromDialog()
+        }
+    }
+    
+    func updateAppButtonTitle() {
+        guard let controller = stateController else { return }
+        if let path = controller.selectedAppPath {
+             let name = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+             appSelectionButton.title = "Selected: \(name)"
+        } else {
+             appSelectionButton.title = "Select App..."
+        }
+        appSelectionButton.isEnabled = (appLaunchSwitch.state == .on)
     }
     
     @objc func toggleLaunchAtLogin(_ sender: NSButton) {

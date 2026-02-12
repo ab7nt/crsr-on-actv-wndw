@@ -6,7 +6,13 @@ class TrackpadListener {
     static let shared = TrackpadListener()
     
     var onThreeFingerTap: (() -> Void)?
+    var onThreeFingerDoubleTap: (() -> Void)?
     var isEnabled = false
+    
+    // Double Tap Logic
+    private var pendingSingleTapWorkItem: DispatchWorkItem?
+    private let doubleTapThreshold: TimeInterval = 0.3
+    private var lastTapTimestamp: TimeInterval = 0
     
     private var isRunning = false
     private var devices: [UnsafeMutableRawPointer] = []
@@ -160,7 +166,31 @@ extension TrackpadListener {
                 // and released soon after that moment.
                 if maxFingersSeenInTouch == 3, threeToRelease <= maxTapDuration {
                     DispatchQueue.main.async {
-                        self.onThreeFingerTap?()
+                        // If double tap is not configured, fire single tap immediately
+                        guard self.onThreeFingerDoubleTap != nil else {
+                            self.onThreeFingerTap?()
+                            return
+                        }
+
+                        // Check for double tap
+                        let now = Date().timeIntervalSince1970
+                        if now - self.lastTapTimestamp < self.doubleTapThreshold {
+                            // Double Tap detected!
+                            self.pendingSingleTapWorkItem?.cancel()
+                            self.pendingSingleTapWorkItem = nil
+                            self.onThreeFingerDoubleTap?()
+                            self.lastTapTimestamp = 0 // Reset
+                        } else {
+                            // Potentially a single tap. Schedule it.
+                            self.lastTapTimestamp = now
+                            
+                            let workItem = DispatchWorkItem { [weak self] in
+                                self?.onThreeFingerTap?()
+                            }
+                            self.pendingSingleTapWorkItem = workItem
+                            
+                            DispatchQueue.main.asyncAfter(deadline: .now() + self.doubleTapThreshold, execute: workItem)
+                        }
                     }
                 }
             }
