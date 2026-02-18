@@ -5,65 +5,78 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
     var stateController: StateController?
     var window: NSWindow!
     var settingsViewController: SettingsViewController!
-    var statusItem: NSStatusItem?
 
+    // STRONG REFERENCE IS CRITICAL.
+    // If this is weak or optional and gets nil'd, the item vanishes.
+    var statusItem: NSStatusItem! 
+    
     // Preference Key
     private let kHideDockIcon = "HideDockIcon"
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         // 1. Initialize logic
         stateController = StateController()
-        Logger.shared.log("[App] StateController initialized.")
         
-        // 2. Setup Main Window
-        setupMainWindow()
-        
-        // 3. Setup Status Item
+        // 2. Create status item
         setupStatusItem()
         
-        // 4. Update Dock Icon State
-        updateActivationPolicy()
+        // 3. Setup Main Window
+        setupMainWindow()
+    }
+    
+    func updateActivationPolicy() {
+         let shouldHide = UserDefaults.standard.bool(forKey: kHideDockIcon)
+         let currentPolicy = NSApp.activationPolicy()
+         
+         if shouldHide {
+             if currentPolicy != .accessory {
+                 NSApp.setActivationPolicy(.accessory)
+             }
+         } else {
+             if currentPolicy != .regular {
+                 NSApp.setActivationPolicy(.regular)
+                 NSApp.activate(ignoringOtherApps: true)
+             }
+         }
+         
+         DispatchQueue.main.async {
+             if !shouldHide && self.window != nil && self.window.isVisible {
+                 NSApp.activate(ignoringOtherApps: true)
+             }
+         }
     }
     
     func setupStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let button = statusItem?.button {
-            // Try explicit MenuBarIcon from Resources
-            var iconImage = NSImage(named: "MenuBarIcon")
-            if iconImage == nil {
-                // Try finding by path if bundle lookup fails
-                if let path = Bundle.main.path(forResource: "MenuBarIcon", ofType: "png") {
-                    iconImage = NSImage(contentsOfFile: path)
-                }
-            }
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        
+        guard let button = statusItem.button else {
+            Logger.shared.log("Failed to get status item button")
+            return
+        }
 
-            if let img = iconImage {
-                img.isTemplate = true
-                img.size = NSSize(width: 18, height: 18)
-                button.image = img
-            } else {
-                // Fallback: Simple icon: a small circle
-                let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
-                    NSColor.labelColor.setStroke()
-                    let path = NSBezierPath(ovalIn: NSRect(x: 4, y: 4, width: 10, height: 10))
-                    path.lineWidth = 2
-                    path.stroke()
-                    return true
-                }
-                image.isTemplate = true
-                button.image = image
-            }
-            
-            button.action = #selector(statusItemClicked)
-            button.target = self
+        // Set Image (Standard 18x18 template)
+        if let img = NSImage(named: "MenuBarIcon") {
+            img.isTemplate = true
+            img.size = NSSize(width: 18, height: 18)
+            button.image = img
+        } else if let path = Bundle.main.path(forResource: "MenuBarIcon", ofType: "png"),
+                  let img = NSImage(contentsOfFile: path) {
+            img.isTemplate = true
+            img.size = NSSize(width: 18, height: 18)
+            button.image = img
+        } else {
+            button.title = "⚡"
         }
         
+        button.action = #selector(statusItemClicked)
+        button.target = self
+        
+        // Construct Menu
         let menu = NSMenu()
         menu.delegate = self
         menu.addItem(NSMenuItem(title: "Settings", action: #selector(showSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem.separator())
         
-        // Launch at Login in Menu
         let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLoginFromMenu(_:)), keyEquivalent: "")
         menu.addItem(launchItem)
         
@@ -72,7 +85,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
-        statusItem?.menu = menu
+        
+        statusItem.menu = menu
+        
+        // Ensure Visible
+        statusItem.isVisible = true
     }
     
     func menuWillOpen(_ menu: NSMenu) {
@@ -106,6 +123,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         window.makeKeyAndOrderFront(nil)
     }
     
+    /* // COMMENTED OUT FOR DEBUG:
     func updateActivationPolicy() {
         let shouldHide = UserDefaults.standard.bool(forKey: kHideDockIcon)
         let currentPolicy = NSApp.activationPolicy()
@@ -126,6 +144,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
             }
         }
     }
+    */
     
     func setDockIconHidden(_ hidden: Bool) {
         UserDefaults.standard.set(hidden, forKey: kHideDockIcon)

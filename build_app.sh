@@ -52,9 +52,8 @@ fi
 
 # Copy MenuBarIcon if exists (for status bar)
 if [ -f "Assets/MenuBarIcon.png" ]; then
-    echo "⚙️  Resizing MenuBarIcon to 36x36 for Status Bar..."
-    # Resize to 36x36 (Retina @2x for 18pt) to ensure it renders crisply and correct scale
-    sips -z 36 36 "Assets/MenuBarIcon.png" --out "${RESOURCES_DIR}/MenuBarIcon.png" > /dev/null
+    echo "Using MenuBarIcon from Assets..."
+    cp "Assets/MenuBarIcon.png" "${RESOURCES_DIR}/MenuBarIcon.png"
 fi
 
 # Create Info.plist

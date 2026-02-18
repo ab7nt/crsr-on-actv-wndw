@@ -1,5 +1,6 @@
 import Cocoa
 
+let app = NSApplication.shared
 let delegate = AppDelegate()
-NSApplication.shared.delegate = delegate
-_ = NSApplicationMain(CommandLine.argc, CommandLine.unsafeArgv)
+app.delegate = delegate
+app.run()
