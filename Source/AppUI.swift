@@ -7,7 +7,22 @@ enum Language {
 }
 
 struct L10n {
-    static var current: Language = .en
+    private static let languageKey = "AppLanguage"
+    
+    static var current: Language = {
+        if let saved = UserDefaults.standard.string(forKey: languageKey) {
+            if saved == "ru" { return .ru }
+            if saved == "en" { return .en }
+        }
+        let preferred = Locale.preferredLanguages.first?.lowercased() ?? "en"
+        return preferred.hasPrefix("ru") ? .ru : .en
+    }()
+    
+    static func setCurrent(_ language: Language) {
+        current = language
+        let raw = (language == .ru) ? "ru" : "en"
+        UserDefaults.standard.set(raw, forKey: languageKey)
+    }
     
     static func get(_ key: String) -> String {
         switch current {
@@ -71,6 +86,10 @@ final class SettingsRootView: NSView {
 }
 
 class SettingsViewController: NSViewController {
+    private var isSystemRussian: Bool {
+        let preferred = Locale.preferredLanguages.first?.lowercased() ?? "en"
+        return preferred.hasPrefix("ru")
+    }
     
     var stateController: StateController?
     
@@ -311,7 +330,7 @@ class SettingsViewController: NSViewController {
     @objc func changeLanguage(_ sender: NSButton) {
         let newLang: Language = (sender.tag == 0) ? .en : .ru
         if L10n.current != newLang {
-            L10n.current = newLang
+            L10n.setCurrent(newLang)
             rebuildUI()
         }
     }
@@ -551,10 +570,15 @@ class SettingsViewController: NSViewController {
     
     private func presentDeleteErrorAlert(message: String) {
         let alert = NSAlert()
-        alert.messageText = "Unable to Move to Trash"
+        if isSystemRussian {
+            alert.messageText = "Не удалось переместить в Корзину"
+            alert.addButton(withTitle: "ОК")
+        } else {
+            alert.messageText = "Unable to Move to Trash"
+            alert.addButton(withTitle: "OK")
+        }
         alert.informativeText = message
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "OK")
         
         if let window = view.window ?? NSApp.keyWindow {
             alert.beginSheetModal(for: window, completionHandler: nil)

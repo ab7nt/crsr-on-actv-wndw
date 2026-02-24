@@ -22,6 +22,11 @@ class StateController: MouseTrackerDelegate {
     private var didShowFinderAutomationAlert = false
     private var finderDeleteWasActiveBeforeSuspend = false
     
+    private var isSystemRussian: Bool {
+        let preferred = Locale.preferredLanguages.first?.lowercased() ?? "en"
+        return preferred.hasPrefix("ru")
+    }
+    
     // User Preferences
     var isSpacesSwipeEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: "EnableSpacesSwipe") }
@@ -133,7 +138,6 @@ class StateController: MouseTrackerDelegate {
         }
 
         WindowDetector.requestPermissions()
-        presentAccessibilityPermissionAlert()
         return WindowDetector.isAccessibilityTrusted()
     }
     
@@ -378,28 +382,18 @@ class StateController: MouseTrackerDelegate {
         }
     }
 
-    private func presentAccessibilityPermissionAlert() {
-        DispatchQueue.main.async {
-            let alert = NSAlert()
-            alert.messageText = "Accessibility Permission Needed"
-            alert.informativeText = "Enable access in System Settings → Privacy & Security → Accessibility, then re-enable this feature."
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "OK")
-            if let window = NSApp.keyWindow {
-                alert.beginSheetModal(for: window, completionHandler: nil)
-            } else {
-                alert.runModal()
-            }
-        }
-    }
-
     private func presentFinderAutomationAlertOnce() {
         guard !didShowFinderAutomationAlert else { return }
         didShowFinderAutomationAlert = true
         DispatchQueue.main.async {
             let alert = NSAlert()
-            alert.messageText = "Finder Automation Permission Needed"
-            alert.informativeText = "Enable access in System Settings → Privacy & Security → Automation, then allow this app to control Finder."
+            if self.isSystemRussian {
+                alert.messageText = "Нужен доступ к автоматизации Finder"
+                alert.informativeText = "Разрешите доступ в Системные настройки → Конфиденциальность и безопасность → Автоматизация, затем разрешите этому приложению управлять Finder."
+            } else {
+                alert.messageText = "Finder Automation Permission Needed"
+                alert.informativeText = "Enable access in System Settings → Privacy & Security → Automation, then allow this app to control Finder."
+            }
             alert.alertStyle = .warning
             alert.addButton(withTitle: "OK")
             if let window = NSApp.keyWindow {

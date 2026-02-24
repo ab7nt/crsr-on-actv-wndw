@@ -261,6 +261,11 @@ class LaunchManager {
 
 final class AppMoveHelper {
     static let shared = AppMoveHelper()
+    
+    private var isSystemRussian: Bool {
+        let preferred = Locale.preferredLanguages.first?.lowercased() ?? "en"
+        return preferred.hasPrefix("ru")
+    }
 
     @discardableResult
     func promptToMoveIfNeeded() -> Bool {
@@ -274,11 +279,18 @@ final class AppMoveHelper {
         }
 
         let alert = NSAlert()
-        alert.messageText = "Move to Applications folder?"
-        alert.informativeText = "Absentweaks works correctly only when launched from Applications. Move it now?"
+        if isSystemRussian {
+            alert.messageText = "Переместить в папку Applications?"
+            alert.informativeText = "Absentweaks корректно работает только из папки Applications. Переместить сейчас?"
+            alert.addButton(withTitle: "Переместить")
+            alert.addButton(withTitle: "Не сейчас")
+        } else {
+            alert.messageText = "Move to Applications folder?"
+            alert.informativeText = "Absentweaks works correctly only when launched from Applications. Move it now?"
+            alert.addButton(withTitle: "Move to Applications")
+            alert.addButton(withTitle: "Not Now")
+        }
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "Move to Applications")
-        alert.addButton(withTitle: "Not Now")
 
         if alert.runModal() != .alertFirstButtonReturn {
             return false
@@ -318,10 +330,15 @@ final class AppMoveHelper {
 
     private func presentMoveFailedAlert(error: Error) {
         let alert = NSAlert()
-        alert.messageText = "Unable to move app"
+        if isSystemRussian {
+            alert.messageText = "Не удалось переместить приложение"
+            alert.addButton(withTitle: "ОК")
+        } else {
+            alert.messageText = "Unable to move app"
+            alert.addButton(withTitle: "OK")
+        }
         alert.informativeText = error.localizedDescription
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "OK")
         alert.runModal()
     }
 }
