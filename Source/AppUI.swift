@@ -374,15 +374,18 @@ class SettingsViewController: NSViewController {
     // --- Actions ---
     
     @objc func toggleLockIcon(_ sender: NSSwitch) {
-        stateController?.isOverlayEnabled = (sender.state == .on)
+        let enabled = stateController?.setOverlayEnabledFromUser(sender.state == .on) ?? false
+        sender.state = enabled ? .on : .off
     }
     
     @objc func toggleSwipe(_ sender: NSSwitch) {
-        stateController?.isSpacesSwipeEnabled = (sender.state == .on)
+        let enabled = stateController?.setSpacesSwipeEnabledFromUser(sender.state == .on) ?? false
+        sender.state = enabled ? .on : .off
     }
     
     @objc func toggleMiddleClick(_ sender: NSSwitch) {
-        stateController?.isMiddleClickGestureEnabled = (sender.state == .on)
+        let enabled = stateController?.setMiddleClickGestureEnabledFromUser(sender.state == .on) ?? false
+        sender.state = enabled ? .on : .off
     }
 
     @objc func toggleAppLaunch(_ sender: NSSwitch) {
@@ -476,17 +479,16 @@ class SettingsViewController: NSViewController {
     
     @objc func toggleDockIcon(_ sender: NSButton) {
         let hide = (sender.state == .on)
-        let policy: NSApplication.ActivationPolicy = hide ? .accessory : .regular
-        NSApp.setActivationPolicy(policy)
-        
-        if policy == .regular {
-            NSApp.activate(ignoringOtherApps: true)
+        if let delegate = NSApp.delegate as? AppDelegate {
+            delegate.setDockIconHidden(hide)
+        } else {
+            UserDefaults.standard.set(hide, forKey: "HideDockIcon")
         }
-        UserDefaults.standard.set(hide, forKey: "HideDockIcon")
     }
     
     @objc func toggleFinderDelete(_ sender: NSButton) {
-        stateController?.isFinderDeleteEnabled = (sender.state == .on)
+        let enabled = stateController?.setFinderDeleteEnabledFromUser(sender.state == .on) ?? false
+        sender.state = enabled ? .on : .off
     }
     
 

@@ -8,12 +8,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
 
     // STRONG REFERENCE IS CRITICAL.
     // If this is weak or optional and gets nil'd, the item vanishes.
-    var statusItem: NSStatusItem! 
+    var statusItem: NSStatusItem!
     
     // Preference Key
     private let kHideDockIcon = "HideDockIcon"
+    private let kStartupDefaultsInitialized = "StartupDefaultsInitialized"
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+        if AppMoveHelper.shared.promptToMoveIfNeeded() {
+            return
+        }
+
+        if !UserDefaults.standard.bool(forKey: kStartupDefaultsInitialized) {
+            LaunchManager.shared.isLaunchAtLoginEnabled = false
+            UserDefaults.standard.set(false, forKey: kHideDockIcon)
+            UserDefaults.standard.set(true, forKey: kStartupDefaultsInitialized)
+        }
+
+        updateActivationPolicy()
+
         // 1. Initialize logic
         stateController = StateController()
         
@@ -123,29 +136,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         window.makeKeyAndOrderFront(nil)
     }
     
-    /* // COMMENTED OUT FOR DEBUG:
-    func updateActivationPolicy() {
-        let shouldHide = UserDefaults.standard.bool(forKey: kHideDockIcon)
-        let currentPolicy = NSApp.activationPolicy()
-        
-        if shouldHide {
-            if currentPolicy != .accessory {
-                NSApp.setActivationPolicy(.accessory)
-            }
-        } else {
-            if currentPolicy != .regular {
-                NSApp.setActivationPolicy(.regular)
-            }
-        }
-        
-        DispatchQueue.main.async {
-            if !shouldHide && self.window != nil && self.window.isVisible {
-                NSApp.activate(ignoringOtherApps: true)
-            }
-        }
-    }
-    */
-    
     func setDockIconHidden(_ hidden: Bool) {
         UserDefaults.standard.set(hidden, forKey: kHideDockIcon)
         updateActivationPolicy()
@@ -171,12 +161,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         window.isReleasedWhenClosed = false
         window.delegate = self
         
-        // Dark theme 
+        // Dark theme
         window.backgroundColor = NSColor(red: 20/255.0, green: 22/255.0, blue: 36/255.0, alpha: 1.0)
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         
-        // Уменьшенная высота окна
         window.minSize = NSSize(width: 420, height: 500)
         window.maxSize = NSSize(width: 420, height: 500)
         
@@ -192,17 +181,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
     }
     
     func applicationDidBecomeActive(_ notification: Notification) {
+        updateActivationPolicy()
         if window != nil {
             window.makeKeyAndOrderFront(nil)
         }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        updateActivationPolicy()
+        if window == nil {
+            setupMainWindow()
+        } else {
+            window.makeKeyAndOrderFront(nil)
+        }
+        return true
     }
     
     func applicationWillTerminate(_ aNotification: Notification) {
     }
     
-    // Window delegate method not strictly needed if isReleasedWhenClosed = false and we reuse the window
     func windowWillClose(_ notification: Notification) {
-        // Do nothing, window is hidden but instance preserved
     }
 }
 
@@ -258,5 +256,72 @@ class LaunchManager {
     
     private func disableLaunchAtLogin() {
         try? FileManager.default.removeItem(at: plistPath)
+    }
+}
+
+final class AppMoveHelper {
+    static let shared = AppMoveHelper()
+
+    @discardableResult
+    func promptToMoveIfNeeded() -> Bool {
+        let bundleURL = URL(fileURLWithPath: Bundle.main.bundlePath)
+
+        guard bundleURL.pathExtension == "app" else {
+            return false
+        }
+        guard !isInApplicationsFolder(bundleURL) else {
+            return false
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Move to Applications folder?"
+        alert.informativeText = "Absentweaks works correctly only when launched from Applications. Move it now?"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Move to Applications")
+        alert.addButton(withTitle: "Not Now")
+
+        if alert.runModal() != .alertFirstButtonReturn {
+            return false
+        }
+
+        do {
+            let destinationURL = try moveAppToApplications(from: bundleURL)
+            relaunch(at: destinationURL)
+            NSApp.terminate(nil)
+            return true
+        } catch {
+            presentMoveFailedAlert(error: error)
+            return false
+        }
+    }
+
+    private func isInApplicationsFolder(_ bundleURL: URL) -> Bool {
+        let resolvedPath = bundleURL.resolvingSymlinksInPath().path
+        return resolvedPath.hasPrefix("/Applications/") || resolvedPath.hasPrefix(NSHomeDirectory() + "/Applications/")
+    }
+
+    private func moveAppToApplications(from sourceURL: URL) throws -> URL {
+        let destinationURL = URL(fileURLWithPath: "/Applications").appendingPathComponent(sourceURL.lastPathComponent)
+        let fileManager = FileManager.default
+
+        if fileManager.fileExists(atPath: destinationURL.path) {
+            return destinationURL
+        }
+
+        try fileManager.copyItem(at: sourceURL, to: destinationURL)
+        return destinationURL
+    }
+
+    private func relaunch(at bundleURL: URL) {
+        NSWorkspace.shared.openApplication(at: bundleURL, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
+    }
+
+    private func presentMoveFailedAlert(error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "Unable to move app"
+        alert.informativeText = error.localizedDescription
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 }

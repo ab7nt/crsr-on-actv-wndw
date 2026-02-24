@@ -30,10 +30,9 @@ class StateController: MouseTrackerDelegate {
     
     var isOverlayEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: "EnableOverlay") }
-        set { 
+        set {
             UserDefaults.standard.set(newValue, forKey: "EnableOverlay")
             if !newValue {
-                // Immediately hide if disabled
                 DispatchQueue.main.async { [weak self] in
                     self?.overlay.hide(animated: false)
                 }
@@ -43,7 +42,7 @@ class StateController: MouseTrackerDelegate {
     
     var isMiddleClickGestureEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: "EnableMiddleClickGesture") }
-        set { 
+        set {
             UserDefaults.standard.set(newValue, forKey: "EnableMiddleClickGesture")
             updateTrackpadListenerState()
         }
@@ -51,7 +50,7 @@ class StateController: MouseTrackerDelegate {
 
     var isAppLaunchEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: "EnableAppLaunch") }
-        set { 
+        set {
             UserDefaults.standard.set(newValue, forKey: "EnableAppLaunch")
             updateTrackpadListenerState()
             setupAppLauncher()
@@ -70,17 +69,86 @@ class StateController: MouseTrackerDelegate {
             updateFinderDeleteMonitoring()
         }
     }
+
+    func setOverlayEnabledFromUser(_ enabled: Bool) -> Bool {
+        guard enabled else {
+            isOverlayEnabled = false
+            return false
+        }
+
+        guard ensureAccessibilityPermissionRequested() else {
+            return false
+        }
+
+        isOverlayEnabled = true
+        return true
+    }
+
+    func setSpacesSwipeEnabledFromUser(_ enabled: Bool) -> Bool {
+        guard enabled else {
+            isSpacesSwipeEnabled = false
+            return false
+        }
+
+        guard ensureAccessibilityPermissionRequested() else {
+            return false
+        }
+
+        isSpacesSwipeEnabled = true
+        return true
+    }
+
+    func setMiddleClickGestureEnabledFromUser(_ enabled: Bool) -> Bool {
+        guard enabled else {
+            isMiddleClickGestureEnabled = false
+            return false
+        }
+
+        guard ensureAccessibilityPermissionRequested() else {
+            return false
+        }
+
+        isMiddleClickGestureEnabled = true
+        return true
+    }
+
+    func setFinderDeleteEnabledFromUser(_ enabled: Bool) -> Bool {
+        guard enabled else {
+            isFinderDeleteEnabled = false
+            return false
+        }
+
+        guard checkFinderAutomationAccess() else {
+            presentFinderAutomationAlertOnce()
+            return false
+        }
+
+        isFinderDeleteEnabled = true
+        return true
+    }
+
+    private func ensureAccessibilityPermissionRequested() -> Bool {
+        if WindowDetector.isAccessibilityTrusted() {
+            return true
+        }
+
+        WindowDetector.requestPermissions()
+        presentAccessibilityPermissionAlert()
+        return WindowDetector.isAccessibilityTrusted()
+    }
     
     init() {
-        // Default to true if not set
         if UserDefaults.standard.object(forKey: "EnableSpacesSwipe") == nil {
-            UserDefaults.standard.set(true, forKey: "EnableSpacesSwipe")
+            UserDefaults.standard.set(false, forKey: "EnableSpacesSwipe")
         }
         if UserDefaults.standard.object(forKey: "EnableOverlay") == nil {
-            UserDefaults.standard.set(true, forKey: "EnableOverlay")
+            UserDefaults.standard.set(false, forKey: "EnableOverlay")
         }
         if UserDefaults.standard.object(forKey: "EnableMiddleClickGesture") == nil {
-            UserDefaults.standard.set(true, forKey: "EnableMiddleClickGesture")
+            UserDefaults.standard.set(false, forKey: "EnableMiddleClickGesture")
+        }
+        if UserDefaults.standard.object(forKey: "EnableAppLaunch") == nil {
+            UserDefaults.standard.set(false, forKey: "EnableAppLaunch")
         }
         if UserDefaults.standard.object(forKey: "EnableFinderDelete") == nil {
             UserDefaults.standard.set(false, forKey: "EnableFinderDelete")
@@ -93,7 +161,6 @@ class StateController: MouseTrackerDelegate {
         
         self.mouseTracker.delegate = self
         
-        setupMenu()
         setupClickMonitoring()
         setupSpaceObserver()
         setupGestures()
@@ -311,6 +378,21 @@ class StateController: MouseTrackerDelegate {
         }
     }
 
+    private func presentAccessibilityPermissionAlert() {
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            alert.messageText = "Accessibility Permission Needed"
+            alert.informativeText = "Enable access in System Settings → Privacy & Security → Accessibility, then re-enable this feature."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            if let window = NSApp.keyWindow {
+                alert.beginSheetModal(for: window, completionHandler: nil)
+            } else {
+                alert.runModal()
+            }
+        }
+    }
+
     private func presentFinderAutomationAlertOnce() {
         guard !didShowFinderAutomationAlert else { return }
         didShowFinderAutomationAlert = true
@@ -353,12 +435,10 @@ class StateController: MouseTrackerDelegate {
             updateFinderDeleteMonitoring()
             finderDeleteWasActiveBeforeSuspend = false
         }
-        // Overlay will naturally reappear on next mouse move check
     }
 
     private func simulateMiddleClick() {
         guard let source = CGEventSource(stateID: .hidSystemState) else { return }
-        // Use current cursor position directly from CoreGraphics (Global coordinates)
         let point = CGEvent(source: nil)?.location ?? .zero
         
         if let mouseDown = CGEvent(mouseEventSource: source, mouseType: .otherMouseDown, mouseCursorPosition: point, mouseButton: .center),
@@ -376,21 +456,15 @@ class StateController: MouseTrackerDelegate {
             guard let self = self else { return }
             guard self.isSpacesSwipeEnabled else { return }
             
-            // Handle Horizontal Swipes (Left/Right)
             guard direction == .left || direction == .right else { return }
             
-            // Get active window
             guard self.windowDetector.getActiveWindowID() != nil else {
                 return
             }
             
-            // Logger.shared.log("[StateController] ✅ Found Active Window ID: \(windowID). Attempting move handling...")
-            
             if direction == .left {
-                // Move Window to Next Display
                 DisplayMover.shared.moveActiveWindowToNextDisplay()
             } else if direction == .right {
-                // Move Window to Previous Display
                 DisplayMover.shared.moveActiveWindowToPrevDisplay()
             }
         }
@@ -406,21 +480,12 @@ class StateController: MouseTrackerDelegate {
     }
     
     @objc private func handleSpaceChange() {
-        // Space switch animation is slow (~0.4s). Check repeatedly.
         let delays = [0.1, 0.5, 0.8]
         for delay in delays {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                // We use current mouse location
                 let loc = NSEvent.mouseLocation
                 self.checkState(at: loc)
             }
-        }
-    }
-    
-    private func setupMenu() {
-        // Simple polling for permissions if not trusted
-        if !WindowDetector.isAccessibilityTrusted() {
-            WindowDetector.requestPermissions()
         }
     }
     
@@ -456,30 +521,21 @@ class StateController: MouseTrackerDelegate {
     private func handleGlobalClick() {
         guard isEnabled, overlay.isVisible else { return }
         
-        // User clicked!
-        // 1. Show "Unlock" state immediately
-        // 2. Hide with animation
-        
         DispatchQueue.main.async {
             self.overlay.setLocked(false)
             
-            // Short delay to let the user see the "Unlock" icon, then fade out
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                 self.overlay.hide(animated: true)
-                // Reset to locked state after hiding, ready for next appearance
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                     self.overlay.setLocked(true)
                 }
             }
         }
         
-        // Reset check timer so we don't immediately pop it back up before the click processes
         lastCheckTime = Date().timeIntervalSince1970 + 0.5
     }
     
     func mouseDidMove(to point: CGPoint) {
-        // If we are currently running an animation (e.g. fading out), skip updates
-        // To simplify, we rely on the fact that `checkState` is throttled.
         guard isEnabled else { return }
         overlay.updatePosition(to: point)
         
@@ -491,62 +547,37 @@ class StateController: MouseTrackerDelegate {
     }
     
     private func checkState(at cursorPoint: CGPoint) {
-        // If overlay feature is disabled, skip checks
         guard isOverlayEnabled else { return }
 
-        // If accessibility isn't enabled, we can't do anything meaningful
         guard WindowDetector.isAccessibilityTrusted() else { return }
         
         let screens = NSScreen.screens
         guard let primaryScreenHeight = screens.first?.frame.height else { return }
         
-        // Debug Log
-        // Logger.shared.log("CheckState at \(cursorPoint). PrimaryHeight: \(primaryScreenHeight)")
-        
-        // ---------------------------------------------------------
-        // PHASE 1: SYSTEM UI EXCLUSION (Fastest)
-        // ---------------------------------------------------------
-        
-        // 1. Menu Bar Check
         if isCursorInMenuBar(cursorPoint, screens: screens) {
             updateOverlay(show: false, reason: "MenuBar")
             return
         }
         
-        // 2. Identify Metadata
         let axCursorPoint = CGPoint(x: cursorPoint.x, y: primaryScreenHeight - cursorPoint.y)
         let pidUnder = windowDetector.getAppPID(at: axCursorPoint)
         let activeApp = NSWorkspace.shared.frontmostApplication
-        
+
         if let pid = pidUnder, let app = NSRunningApplication(processIdentifier: pid), let _ = app.bundleIdentifier {
-            // Logger.shared.log("Stats: ActiveApp=\(activeApp?.bundleIdentifier ?? "nil"), HoverApp=\(bundle) (PID: \(pid))")
         } else {
-             // Logger.shared.log("Stats: ActiveApp=\(activeApp?.bundleIdentifier ?? "nil"), HoverPID=\(pidUnder == nil ? "nil" : "\(pidUnder!)") (No Bundle Info)")
         }
 
-        // ---------------------------------------------------------
-        // PHASE 2: PID / INTERACTION CHECK (Precision)
-        // ---------------------------------------------------------
-        
         if let pid = pidUnder, let app = NSRunningApplication(processIdentifier: pid), let bundleId = app.bundleIdentifier {
-            
-            // A. Whitelist Safe Apps (Always Hide)
-            if isSafeBundle(bundleId) { 
+            if isSafeBundle(bundleId) {
                 updateOverlay(show: false, reason: "SafeBundle: \(bundleId)")
-                return 
+                return
             }
             
-            // B. Active App Interaction (Consolidated)
             if let active = activeApp, pid == active.processIdentifier {
                 updateOverlay(show: false, reason: "HoveringActiveApp: \(bundleId)")
                 return
             }
         }
-        
-        // ---------------------------------------------------------
-        // PHASE 3: GEOMETRY CHECK (Fallback)
-        // ---------------------------------------------------------
-        // If PID failed or mismatch, check geometry
         
         if let activeWindowFrame = windowDetector.getActiveWindowFrame() {
             let cocoaActiveWindowFrame = CGRect(
@@ -556,7 +587,6 @@ class StateController: MouseTrackerDelegate {
                 height: activeWindowFrame.height
             )
             
-            // Relaxed geometry (padding)
             let relaxedFrame = cocoaActiveWindowFrame.insetBy(dx: -5, dy: -5)
             if NSPointInRect(cursorPoint, relaxedFrame) {
                  updateOverlay(show: false, reason: "GeometryMatch")
@@ -564,25 +594,16 @@ class StateController: MouseTrackerDelegate {
             }
         }
         
-        // ---------------------------------------------------------
-        // PHASE 4: VISUAL OVERRIDE (Last Resort)
-        // ---------------------------------------------------------
-        
         if isCursorOverActiveAppWindow(cursorPoint, primaryHeight: primaryScreenHeight) {
             updateOverlay(show: false, reason: "VisualOverride")
             return
         }
         
-        // Check for Dock Visual Auto-Hide Override
-        // This catches the Dock when it is popped up (Auto-Sized) even if AX fails
         if isCursorOverDock(cursorPoint, primaryHeight: primaryScreenHeight) {
              updateOverlay(show: false, reason: "DockVisual")
              return
         }
 
-        // ---------------------------------------------------------
-        // PHASE 5: UNSAFE (Show Lock)
-        // ---------------------------------------------------------
         updateOverlay(show: true, reason: "Verdict:Unsafe")
     }
     
@@ -592,18 +613,14 @@ class StateController: MouseTrackerDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             
-            // Logger.shared.log("[DECISION] \(show ? "SHOW" : "HIDE") -> \(reason)")
-            
             if show {
                 if !self.overlay.isVisible || !self.overlay.isLockedState {
-                    // Logger.shared.log("[DECISION] SHOW -> \(reason)")
                     self.overlay.setLocked(true)
                     self.overlay.show()
                 }
                 self.overlay.updatePosition(to: NSEvent.mouseLocation)
             } else {
                 if self.overlay.isVisible {
-                    // Logger.shared.log("[DECISION] HIDE -> \(reason)")
                     self.overlay.hide(animated: false)
                 }
             }
@@ -622,102 +639,89 @@ class StateController: MouseTrackerDelegate {
     }
     
     private func isSafeBundle(_ bundleId: String) -> Bool {
-        let safe = [
-            Bundle.main.bundleIdentifier ?? "com.user.absentweaks",
-            "com.apple.finder",
-            "com.apple.WindowManager", // Stage Manager
+        let safeBundles = [
+            "com.apple.dock",
+            "com.apple.systemuiserver",
             "com.apple.notificationcenterui",
             "com.apple.controlcenter",
-            "com.apple.dock" // Dock, Launchpad, Mission Control
+            "com.apple.loginwindow"
         ]
-        return safe.contains(bundleId)
+        return safeBundles.contains(bundleId)
     }
     
-    private func isCursorInDockArea(_ point: CGPoint, screens: [NSScreen]) -> Bool {
-        guard let screen = screens.first(where: { NSPointInRect(point, $0.frame) }) else { return false }
-        
-        // Reliable check: The Dock resides in the exclusion zone of visibleFrame.
-        // Since 'visibleFrame' describes the available working area (screen minus menu bar and dock),
-        // any point OUTSIDE 'visibleFrame' is either Menu Bar or Dock.
-        // We already checked Menu Bar (Top) in Phase 1, so this catches the Dock (Bottom/Left/Right).
-        return !NSPointInRect(point, screen.visibleFrame)
-    }
-
-    private func isCursorOverActiveAppWindow(_ cursor: CGPoint, primaryHeight: CGFloat) -> Bool {
-        guard let app = NSWorkspace.shared.frontmostApplication else { return false }
-        let pid = app.processIdentifier
-        
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+    private func isCursorOverDock(_ cursorPoint: CGPoint, primaryHeight: CGFloat) -> Bool {
+        guard let dockApp = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first else {
             return false
         }
         
-        for entry in list {
-            guard let ownerPID = entry[kCGWindowOwnerPID as String] as? Int,
-                  ownerPID == Int(pid) else { continue }
+        let dockPID = dockApp.processIdentifier
+        let dockElement = AXUIElementCreateApplication(dockPID)
+        
+        var windowsValue: AnyObject?
+        let result = AXUIElementCopyAttributeValue(dockElement, kAXWindowsAttribute as CFString, &windowsValue)
+        guard result == .success,
+              let dockWindows = windowsValue as? [AXUIElement],
+              !dockWindows.isEmpty else {
+            return false
+        }
+        
+        for dockWindow in dockWindows {
+            var posValue: AnyObject?
+            var sizeValue: AnyObject?
+            AXUIElementCopyAttributeValue(dockWindow, kAXPositionAttribute as CFString, &posValue)
+            AXUIElementCopyAttributeValue(dockWindow, kAXSizeAttribute as CFString, &sizeValue)
             
-            guard let boundsDict = entry[kCGWindowBounds as String] as? [String: Any],
-                  let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) else { continue }
-            
-            // Convert CGWindowList bounds (Top-Left) to Cocoa (Bottom-Left)
-            // Cocoa Y = PrimaryHeight - (CG_Y + CG_Height)
-            let cocoaFrame = CGRect(
-                x: bounds.origin.x,
-                y: primaryHeight - (bounds.origin.y + bounds.height),
-                width: bounds.width,
-                height: bounds.height
-            )
-            
-            if NSPointInRect(cursor, cocoaFrame) {
-                return true
+            if posValue != nil, sizeValue != nil {
+                let pos = posValue as! AXValue
+                let size = sizeValue as! AXValue
+                var cgPos = CGPoint.zero
+                var cgSize = CGSize.zero
+                AXValueGetValue(pos, .cgPoint, &cgPos)
+                AXValueGetValue(size, .cgSize, &cgSize)
+                
+                let cocoaRect = CGRect(x: cgPos.x,
+                                       y: primaryHeight - (cgPos.y + cgSize.height),
+                                       width: cgSize.width,
+                                       height: cgSize.height)
+                if cocoaRect.contains(cursorPoint) {
+                    return true
+                }
             }
         }
         
         return false
     }
-
-    private func isCursorOverDock(_ cursor: CGPoint, primaryHeight: CGFloat) -> Bool {
-        let apps = NSWorkspace.shared.runningApplications
-        guard let dockApp = apps.first(where: { $0.bundleIdentifier == "com.apple.dock" }) else { return false }
-        let pid = dockApp.processIdentifier
+    
+    private func isCursorOverActiveAppWindow(_ cursorPoint: CGPoint, primaryHeight: CGFloat) -> Bool {
+        guard let activeApp = NSWorkspace.shared.frontmostApplication else { return false }
+        let axApp = AXUIElementCreateApplication(activeApp.processIdentifier)
         
-        // Note: We MUST include Desktop elements to see the Dock, but filter out the Wallpaper later.
-        let options: CGWindowListOption = [.optionOnScreenOnly] 
-        guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+        var focusedWindow: AnyObject?
+        let result = AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focusedWindow)
+        guard result == .success, let windowEl = focusedWindow as! AXUIElement? else {
             return false
         }
         
-        for entry in list {
-            guard let ownerPID = entry[kCGWindowOwnerPID as String] as? Int,
-                  ownerPID == Int(pid) else { continue }
-            
-            // Filter out the Desktop Wallpaper (usually Layer < 0 or specific names)
-            // The Dock itself is usually Layer 20 or similar (kCGBackstopMenuLevel)
-            guard let layer = entry[kCGWindowLayer as String] as? Int, layer > 0 else { continue }
-            
-            guard let boundsDict = entry[kCGWindowBounds as String] as? [String: Any],
-                  let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) else { continue }
-            
-            // Ignore Full Screen Dock Windows (Background/Gesture layers)
-            // A real UI Dock strip will be thin in at least one dimension.
-            // If both dimensions are large, it's likely the invisible desktop layer.
-            if bounds.width > 400 && bounds.height > 400 {
-                continue
-            }
-            
-            let cocoaFrame = CGRect(
-                x: bounds.origin.x,
-                y: primaryHeight - (bounds.origin.y + bounds.height),
-                width: bounds.width,
-                height: bounds.height
-            )
-            
-            if NSPointInRect(cursor, cocoaFrame) {
-                // Logger.shared.log("DockWindow Hit! Layer=\(layer), CocoaFrame=\(cocoaFrame), CGFrame=\(bounds)")
-                return true
-            }
+        var posValue: AnyObject?
+        var sizeValue: AnyObject?
+        AXUIElementCopyAttributeValue(windowEl, kAXPositionAttribute as CFString, &posValue)
+        AXUIElementCopyAttributeValue(windowEl, kAXSizeAttribute as CFString, &sizeValue)
+        
+        guard posValue != nil, sizeValue != nil else {
+            return false
         }
-        return false
+        let pos = posValue as! AXValue
+        let size = sizeValue as! AXValue
+        
+        var cgPos = CGPoint.zero
+        var cgSize = CGSize.zero
+        AXValueGetValue(pos, .cgPoint, &cgPos)
+        AXValueGetValue(size, .cgSize, &cgSize)
+        
+        let cocoaRect = CGRect(x: cgPos.x,
+                               y: primaryHeight - (cgPos.y + cgSize.height),
+                               width: cgSize.width,
+                               height: cgSize.height)
+        return cocoaRect.contains(cursorPoint)
     }
-
 }
