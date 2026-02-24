@@ -40,3 +40,10 @@ DerivedData/
 *.xcodeproj/
 *.xcworkspace/
 xcuserdata/
+
+# Absentweaks V2 artifacts
+SourceV2/
+AbsentweaksV2.app/
+build_app_v2.sh
+
+TestStatusApp

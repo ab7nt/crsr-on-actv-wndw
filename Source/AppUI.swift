@@ -31,7 +31,9 @@ struct L10n {
         "dialog_title": "Select application to launch",
         "launch_start": "Launch on Start",
         "hide_dock": "Hide Dock Icon",
-        "quit": "Quit App"
+        "quit": "Quit App",
+        "finder_delete": "Delete files with Delete key",
+        "finder_delete_sub": "Works in Finder (instead of ⌘ + Delete)",
     ]
     
     private static let ru: [String: String] = [
@@ -49,8 +51,23 @@ struct L10n {
         "dialog_title": "Выберите приложение для запуска",
         "launch_start": "Запускать при старте",
         "hide_dock": "Убрать иконку из Dock",
-        "quit": "Завершить"
+        "quit": "Завершить",
+        "finder_delete": "Удалять файлы клавишей Delete",
+        "finder_delete_sub": "Работает в Finder (вместо ⌘ + Delete)"
     ]
+}
+
+final class SettingsRootView: NSView {
+    weak var owner: SettingsViewController?
+    
+    override var acceptsFirstResponder: Bool { true }
+    
+    override func keyDown(with event: NSEvent) {
+        if owner?.handleKeyDown(event) == true {
+            return
+        }
+        super.keyDown(with: event)
+    }
 }
 
 class SettingsViewController: NSViewController {
@@ -67,15 +84,23 @@ class SettingsViewController: NSViewController {
     // Checkbox UI Elements
     private var launchCheckbox: NSButton!
     private var dockCheckbox: NSButton!
+    private var finderDeleteSwitch: NSSwitch!
     
     override func loadView() {
-        self.view = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 600))
+        let rootView = SettingsRootView(frame: NSRect(x: 0, y: 0, width: 420, height: 600))
+        rootView.owner = self
+        self.view = rootView
     }
     
     override func viewDidLoad() {
         super.viewDidLoad()
         setupUI()
         refresh()
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        view.window?.makeFirstResponder(view)
     }
     
     private func rebuildUI() {
@@ -100,6 +125,9 @@ class SettingsViewController: NSViewController {
         
         // Hide Dock Icon
         dockCheckbox.state = UserDefaults.standard.bool(forKey: "HideDockIcon") ? .on : .off
+        
+        // Finder Delete
+        finderDeleteSwitch.state = (stateController?.isFinderDeleteEnabled ?? false) ? .on : .off
     }
     
     private func setupUI() {
@@ -108,15 +136,16 @@ class SettingsViewController: NSViewController {
         mainStack.alignment = .centerX
         mainStack.spacing = 20
         // Устанавливаем отступы от краев контейнера. 
-        // top: 50, bottom: 40
-        mainStack.edgeInsets = NSEdgeInsets(top: 50, left: 0, bottom: 40, right: 0)
+        // top: 22, bottom: 14
+        mainStack.edgeInsets = NSEdgeInsets(top: 22, left: 0, bottom: 14, right: 0)
         mainStack.translatesAutoresizingMaskIntoConstraints = false
         
         view.addSubview(mainStack)
         
         NSLayoutConstraint.activate([
             mainStack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            mainStack.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            mainStack.topAnchor.constraint(equalTo: view.topAnchor),
+            mainStack.bottomAnchor.constraint(lessThanOrEqualTo: view.bottomAnchor),
             mainStack.widthAnchor.constraint(equalTo: view.widthAnchor, constant: -40)
         ])
         
@@ -171,6 +200,15 @@ class SettingsViewController: NSViewController {
             switchObj: &middleClickSwitch,
             action: #selector(toggleMiddleClick(_:))
         ))
+
+        // 3.1 Finder Delete
+        mainStack.addArrangedSubview(createSwitchRow(
+            title: L10n.get("finder_delete"),
+            subtitle: L10n.get("finder_delete_sub"),
+            switchObj: &finderDeleteSwitch,
+            action: #selector(toggleFinderDelete(_:))
+        ))
+
         
         // 4. Open App (3-Finger Double Tap)
         let appLaunchRow = createSwitchRow(
@@ -251,6 +289,7 @@ class SettingsViewController: NSViewController {
         footerStack.addArrangedSubview(quitBtn)
         
         mainStack.addArrangedSubview(footerStack)
+        mainStack.addArrangedSubview(createSpacer(height: 3))
     }
     
     private func createLangButton(title: String, lang: Language) -> NSButton {
@@ -444,5 +483,81 @@ class SettingsViewController: NSViewController {
             NSApp.activate(ignoringOtherApps: true)
         }
         UserDefaults.standard.set(hide, forKey: "HideDockIcon")
+    }
+    
+    @objc func toggleFinderDelete(_ sender: NSButton) {
+        stateController?.isFinderDeleteEnabled = (sender.state == .on)
+    }
+    
+
+    // MARK: - Key Handling (Delete)
+    
+    @discardableResult
+    func handleKeyDown(_ event: NSEvent) -> Bool {
+        if shouldIgnoreForTextInput() {
+            return false
+        }
+        if event.modifierFlags.contains(.command) {
+            return false
+        }
+        guard isDeleteKey(event) else {
+            return false
+        }
+        return handleDeleteSelectedFile()
+    }
+    
+    private func shouldIgnoreForTextInput() -> Bool {
+        guard let responder = view.window?.firstResponder else { return false }
+        if let textView = responder as? NSTextView {
+            return textView.isFieldEditor
+        }
+        if responder is NSTextField {
+            return true
+        }
+        return false
+    }
+    
+    private func isDeleteKey(_ event: NSEvent) -> Bool {
+        return event.keyCode == 51 || event.keyCode == 117
+    }
+    
+    private func handleDeleteSelectedFile() -> Bool {
+        guard let controller = stateController, let path = controller.selectedAppPath else {
+            return false
+        }
+        let url = URL(fileURLWithPath: path)
+        
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            Logger.shared.log("Selected file missing at path: \(url.path)")
+            controller.selectedAppPath = nil
+            updateAppButtonTitle()
+            return true
+        }
+        
+        do {
+            var resultingURL: NSURL?
+            try FileManager.default.trashItem(at: url, resultingItemURL: &resultingURL)
+            controller.selectedAppPath = nil
+            updateAppButtonTitle()
+            return true
+        } catch {
+            Logger.shared.log("Failed to move to Trash: \(url.path). Error: \(error)")
+            presentDeleteErrorAlert(message: error.localizedDescription)
+            return true
+        }
+    }
+    
+    private func presentDeleteErrorAlert(message: String) {
+        let alert = NSAlert()
+        alert.messageText = "Unable to Move to Trash"
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        
+        if let window = view.window ?? NSApp.keyWindow {
+            alert.beginSheetModal(for: window, completionHandler: nil)
+        } else {
+            alert.runModal()
+        }
     }
 }

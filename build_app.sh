@@ -78,6 +78,8 @@ cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
     <string>AppIcon</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Allow this app to control Finder for moving selected items to the Trash.</string>
 </dict>
 </plist>
 PLIST

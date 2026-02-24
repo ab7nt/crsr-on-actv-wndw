@@ -6,7 +6,8 @@ protocol MouseTrackerDelegate: AnyObject {
 
 class MouseTracker {
     weak var delegate: MouseTrackerDelegate?
-    private var monitor: Any?
+    private var globalMonitor: Any?
+    private var localMonitor: Any?
     
     init() {
         startTracking()
@@ -17,26 +18,30 @@ class MouseTracker {
     }
     
     func startTracking() {
-        guard monitor == nil else { return }
+        guard globalMonitor == nil, localMonitor == nil else { return }
         
         // Global monitor for when the app is in the background (normal state for this utility)
         let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
         
-        monitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
             self?.notifyLocation()
         }
         
         // Also track local events just in case
-        NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
             self?.notifyLocation()
             return event
         }
     }
     
     func stopTracking() {
-        if let monitor = monitor {
+        if let monitor = globalMonitor {
             NSEvent.removeMonitor(monitor)
-            self.monitor = nil
+            globalMonitor = nil
+        }
+        if let monitor = localMonitor {
+            NSEvent.removeMonitor(monitor)
+            localMonitor = nil
         }
     }
     

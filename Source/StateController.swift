@@ -1,4 +1,5 @@
 import Cocoa
+import CoreServices
 
 class StateController: MouseTrackerDelegate {
     
@@ -16,6 +17,10 @@ class StateController: MouseTrackerDelegate {
     private var isSuspended = false // For when dialogs are open
     private var clickMonitor: Any?
     private var clickMonitorLocal: Any? // Added separate handle for local
+    private var finderDeleteMonitorGlobal: Any?
+    private var finderDeleteMonitorLocal: Any?
+    private var didShowFinderAutomationAlert = false
+    private var finderDeleteWasActiveBeforeSuspend = false
     
     // User Preferences
     var isSpacesSwipeEnabled: Bool {
@@ -58,6 +63,14 @@ class StateController: MouseTrackerDelegate {
         set { UserDefaults.standard.set(newValue, forKey: "SelectedAppPath") }
     }
     
+    var isFinderDeleteEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "EnableFinderDelete") }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "EnableFinderDelete")
+            updateFinderDeleteMonitoring()
+        }
+    }
+    
     init() {
         // Default to true if not set
         if UserDefaults.standard.object(forKey: "EnableSpacesSwipe") == nil {
@@ -68,6 +81,9 @@ class StateController: MouseTrackerDelegate {
         }
         if UserDefaults.standard.object(forKey: "EnableMiddleClickGesture") == nil {
             UserDefaults.standard.set(true, forKey: "EnableMiddleClickGesture")
+        }
+        if UserDefaults.standard.object(forKey: "EnableFinderDelete") == nil {
+            UserDefaults.standard.set(false, forKey: "EnableFinderDelete")
         }
         
         Logger.shared.log("App Started. Check Permissions: \(WindowDetector.isAccessibilityTrusted())")
@@ -82,12 +98,19 @@ class StateController: MouseTrackerDelegate {
         setupSpaceObserver()
         setupGestures()
         setupTrackpadGestures()
+        updateFinderDeleteMonitoring()
     }
     
     deinit {
         swipeTracker = nil // Stop monitoring
         TrackpadListener.shared.stop()
         if let monitor = clickMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = finderDeleteMonitorGlobal {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = finderDeleteMonitorLocal {
             NSEvent.removeMonitor(monitor)
         }
         NSWorkspace.shared.notificationCenter.removeObserver(self)
@@ -136,16 +159,186 @@ class StateController: MouseTrackerDelegate {
             TrackpadListener.shared.stop()
         }
     }
+
+    // MARK: - Finder Delete (Global)
+    
+    private func updateFinderDeleteMonitoring() {
+        guard !isSuspended else {
+            if let monitor = finderDeleteMonitorGlobal {
+                NSEvent.removeMonitor(monitor)
+                finderDeleteMonitorGlobal = nil
+            }
+            if let monitor = finderDeleteMonitorLocal {
+                NSEvent.removeMonitor(monitor)
+                finderDeleteMonitorLocal = nil
+            }
+            return
+        }
+
+        if isFinderDeleteEnabled {
+            if finderDeleteMonitorGlobal == nil {
+                finderDeleteMonitorGlobal = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                    self?.handleFinderDeleteKey(event, isLocal: false)
+                }
+            }
+            if finderDeleteMonitorLocal == nil {
+                finderDeleteMonitorLocal = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                    self?.handleFinderDeleteKey(event, isLocal: true)
+                    return event
+                }
+            }
+        } else {
+            if let monitor = finderDeleteMonitorGlobal {
+                NSEvent.removeMonitor(monitor)
+                finderDeleteMonitorGlobal = nil
+            }
+            if let monitor = finderDeleteMonitorLocal {
+                NSEvent.removeMonitor(monitor)
+                finderDeleteMonitorLocal = nil
+            }
+        }
+    }
+    
+    private func handleFinderDeleteKey(_ event: NSEvent, isLocal: Bool) {
+        guard !isSuspended else { return }
+        guard isDeleteKey(event), !event.modifierFlags.contains(.command) else { return }
+        if isLocal && shouldIgnoreForTextInput() {
+            return
+        }
+        
+        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        if frontmost != "com.apple.finder" && frontmost != Bundle.main.bundleIdentifier {
+            return
+        }
+        
+        trashFinderSelection()
+    }
+    
+    private func isDeleteKey(_ event: NSEvent) -> Bool {
+        return event.keyCode == 51 || event.keyCode == 117
+    }
+    
+    private func shouldIgnoreForTextInput() -> Bool {
+        guard let responder = NSApp.keyWindow?.firstResponder else { return false }
+        if let textView = responder as? NSTextView {
+            return textView.isFieldEditor
+        }
+        if responder is NSTextField {
+            return true
+        }
+        return false
+    }
+    
+    private func trashFinderSelection() {
+        let urls = fetchFinderSelectionURLs()
+        guard !urls.isEmpty else { return }
+        
+        for url in urls {
+            do {
+                var resultingURL: NSURL?
+                try FileManager.default.trashItem(at: url, resultingItemURL: &resultingURL)
+            } catch {
+                Logger.shared.log("Failed to trash Finder item: \(url.path). Error: \(error)")
+            }
+        }
+    }
+    
+    private func fetchFinderSelectionURLs() -> [URL] {
+        let scriptSource = """
+        tell application "Finder"
+            set sel to selection as alias list
+            set out to {}
+            repeat with a in sel
+                set end of out to POSIX path of a
+            end repeat
+        end tell
+        return out
+        """
+        
+        var errorInfo: NSDictionary?
+        let script = NSAppleScript(source: scriptSource)
+        let result: NSAppleEventDescriptor? = runAppleScriptOnMain {
+            script?.executeAndReturnError(&errorInfo)
+        }
+        
+        guard let resultUnwrapped = result else {
+            if let err = errorInfo {
+                Logger.shared.log("AppleScript error getting Finder selection: \(err)")
+                if let code = err[NSAppleScript.errorNumber] as? Int, code == -1743 {
+                    presentFinderAutomationAlertOnce()
+                }
+            }
+            return []
+        }
+        
+        var urls: [URL] = []
+        let count = resultUnwrapped.numberOfItems
+        if count == 0 {
+            Logger.shared.log("Finder selection is empty.")
+            return []
+        }
+        
+        for index in 1...count {
+            guard let item = resultUnwrapped.atIndex(index),
+                  let path = item.stringValue else { continue }
+            urls.append(URL(fileURLWithPath: path))
+        }
+        
+        return urls
+    }
+
+    func checkFinderAutomationAccess() -> Bool {
+        let scriptSource = "tell application \"Finder\" to get name of startup disk"
+        var errorInfo: NSDictionary?
+        let script = NSAppleScript(source: scriptSource)
+        _ = runAppleScriptOnMain {
+            script?.executeAndReturnError(&errorInfo)
+        }
+        if let err = errorInfo,
+           let code = err[NSAppleScript.errorNumber] as? Int,
+           code == -1743 {
+            return false
+        }
+        return true
+    }
+
+    private func runAppleScriptOnMain<T>(_ work: () -> T) -> T {
+        if Thread.isMainThread {
+            return work()
+        }
+        return DispatchQueue.main.sync {
+            work()
+        }
+    }
+
+    private func presentFinderAutomationAlertOnce() {
+        guard !didShowFinderAutomationAlert else { return }
+        didShowFinderAutomationAlert = true
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            alert.messageText = "Finder Automation Permission Needed"
+            alert.informativeText = "Enable access in System Settings → Privacy & Security → Automation, then allow this app to control Finder."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            if let window = NSApp.keyWindow {
+                alert.beginSheetModal(for: window, completionHandler: nil)
+            } else {
+                alert.runModal()
+            }
+        }
+    }
     
     // MARK: - Suspension Logic
     
     func suspendForDialog() {
         Logger.shared.log("Suspending for Dialog...")
         isSuspended = true
+        finderDeleteWasActiveBeforeSuspend = isFinderDeleteEnabled
         TrackpadListener.shared.stop()
         mouseTracker.stopTracking()
         swipeTracker?.stop()
         stopClickMonitoring()
+        updateFinderDeleteMonitoring()
         overlay.hide(animated: false)
     }
     
@@ -156,6 +349,10 @@ class StateController: MouseTrackerDelegate {
         mouseTracker.startTracking()
         swipeTracker?.start()
         startClickMonitoring()
+        if finderDeleteWasActiveBeforeSuspend {
+            updateFinderDeleteMonitoring()
+            finderDeleteWasActiveBeforeSuspend = false
+        }
         // Overlay will naturally reappear on next mouse move check
     }
 

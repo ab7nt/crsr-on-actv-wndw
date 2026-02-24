@@ -26,6 +26,8 @@ class SwipeTracker {
     }
     
     func start() {
+        guard monitor == nil, scrollMonitor == nil else { return }
+
         // 1. Listen for Native Swipe Events
         // Note: This requires the user to 'Enable' standard swipe gestures or unbind system ones if conflicts rise.
         monitor = NSEvent.addGlobalMonitorForEvents(matching: .swipe) { [weak self] event in
