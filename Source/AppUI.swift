@@ -34,7 +34,7 @@ struct L10n {
     private static let en: [String: String] = [
         "title": "Absentweaks",
         "lock_title": "Show the cursor lock icon",
-        "lock_subtitle": "(above the inactive window)",
+        "lock_subtitle": "above the inactive window",
         "swipe_title": "Swipe window to another screen",
         "swipe_subtitle": "⌘ + Scroll",
         "middle_title": "Middle mouse button click",
@@ -47,27 +47,27 @@ struct L10n {
         "launch_start": "Launch on Start",
         "hide_dock": "Hide Dock Icon",
         "hide_back_to_dock": "Hide Back to Dock",
-        "hide_back_to_dock_sub": "On click on the active application's icon",
+        "hide_back_to_dock_sub": "on click on the active application's icon",
         "quit": "Quit App",
     ]
     
     private static let ru: [String: String] = [
         "title": "Absentweaks",
         "lock_title": "Показывать иконку рядом с курсором",
-        "lock_subtitle": "(над неактивным окном)",
+        "lock_subtitle": "над неактивным окном",
         "swipe_title": "Перемещение окна на другой экран",
         "swipe_subtitle": "⌘ + Скролл",
         "middle_title": "Клик средней кнопкой мыши",
-        "middle_subtitle": "Касание 3 пальцами",
+        "middle_subtitle": "касание 3 пальцами",
         "app_title": "Быстрый запуск приложения",
-        "app_subtitle": "Двойное касание 3 пальцами",
+        "app_subtitle": "двойное касание 3 пальцами",
         "select_app": "Выбрать приложение...",
         "selected_prefix": "Выбрано: ",
         "dialog_title": "Выберите приложение для запуска",
         "launch_start": "Запускать при старте",
         "hide_dock": "Убрать иконку из Dock",
         "hide_back_to_dock": "Скрывать обратно в Dock",
-        "hide_back_to_dock_sub": "При клике по иконке активного приложения",
+        "hide_back_to_dock_sub": "при клике по иконке активного приложения",
         "quit": "Завершить"
     ]
 }
