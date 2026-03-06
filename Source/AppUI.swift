@@ -47,10 +47,8 @@ struct L10n {
         "launch_start": "Launch on Start",
         "hide_dock": "Hide Dock Icon",
         "hide_back_to_dock": "Hide Back to Dock",
-        "hide_back_to_dock_sub": "On repeated click on its Dock icon",
+        "hide_back_to_dock_sub": "On click on the active application's icon",
         "quit": "Quit App",
-        "finder_delete": "Delete files with Delete key",
-        "finder_delete_sub": "Works in Finder (instead of ⌘ + Delete)",
     ]
     
     private static let ru: [String: String] = [
@@ -69,32 +67,16 @@ struct L10n {
         "launch_start": "Запускать при старте",
         "hide_dock": "Убрать иконку из Dock",
         "hide_back_to_dock": "Скрывать обратно в Dock",
-        "hide_back_to_dock_sub": "При повторном клике по его иконке",
-        "quit": "Завершить",
-        "finder_delete": "Удалять файлы клавишей Delete",
-        "finder_delete_sub": "Работает в Finder (вместо ⌘ + Delete)"
+        "hide_back_to_dock_sub": "При клике по иконке активного приложения",
+        "quit": "Завершить"
     ]
 }
 
 final class SettingsRootView: NSView {
-    weak var owner: SettingsViewController?
-    
     override var acceptsFirstResponder: Bool { true }
-    
-    override func keyDown(with event: NSEvent) {
-        if owner?.handleKeyDown(event) == true {
-            return
-        }
-        super.keyDown(with: event)
-    }
 }
 
 class SettingsViewController: NSViewController {
-    private var isSystemRussian: Bool {
-        let preferred = Locale.preferredLanguages.first?.lowercased() ?? "en"
-        return preferred.hasPrefix("ru")
-    }
-    
     var stateController: StateController?
     
     // Switch UI Elements
@@ -107,12 +89,10 @@ class SettingsViewController: NSViewController {
     // Checkbox UI Elements
     private var launchCheckbox: NSButton!
     private var dockCheckbox: NSButton!
-    private var finderDeleteSwitch: NSSwitch!
     private var hideBackToDockSwitch: NSSwitch!
     
     override func loadView() {
         let rootView = SettingsRootView(frame: NSRect(x: 0, y: 0, width: 420, height: 600))
-        rootView.owner = self
         self.view = rootView
     }
     
@@ -150,9 +130,6 @@ class SettingsViewController: NSViewController {
         // Hide Dock Icon
         dockCheckbox.state = UserDefaults.standard.bool(forKey: "HideDockIcon") ? .on : .off
         
-        // Finder Delete
-        finderDeleteSwitch.state = (stateController?.isFinderDeleteEnabled ?? false) ? .on : .off
-
         // Hide back to Dock on repeated Dock icon click
         hideBackToDockSwitch.state = UserDefaults.standard.bool(forKey: "HideBackToDockOnReopen") ? .on : .off
     }
@@ -228,15 +205,6 @@ class SettingsViewController: NSViewController {
             action: #selector(toggleMiddleClick(_:))
         ))
 
-        // 3.1 Finder Delete
-        mainStack.addArrangedSubview(createSwitchRow(
-            title: L10n.get("finder_delete"),
-            subtitle: L10n.get("finder_delete_sub"),
-            switchObj: &finderDeleteSwitch,
-            action: #selector(toggleFinderDelete(_:))
-        ))
-
-        
         // 4. Hide back to Dock on repeated Dock icon click
         mainStack.addArrangedSubview(createSwitchRow(
             title: L10n.get("hide_back_to_dock"),
@@ -521,91 +489,9 @@ class SettingsViewController: NSViewController {
         }
     }
     
-    @objc func toggleFinderDelete(_ sender: NSButton) {
-        let enabled = stateController?.setFinderDeleteEnabledFromUser(sender.state == .on) ?? false
-        sender.state = enabled ? .on : .off
-    }
-
     @objc func toggleHideBackToDock(_ sender: NSSwitch) {
         let enabled = (sender.state == .on)
         UserDefaults.standard.set(enabled, forKey: "HideBackToDockOnReopen")
         Logger.shared.log("[DockReopen] setting HideBackToDockOnReopen=\(enabled)")
-    }
-    
-
-    // MARK: - Key Handling (Delete)
-    
-    @discardableResult
-    func handleKeyDown(_ event: NSEvent) -> Bool {
-        if shouldIgnoreForTextInput() {
-            return false
-        }
-        if event.modifierFlags.contains(.command) {
-            return false
-        }
-        guard isDeleteKey(event) else {
-            return false
-        }
-        return handleDeleteSelectedFile()
-    }
-    
-    private func shouldIgnoreForTextInput() -> Bool {
-        guard let responder = view.window?.firstResponder else { return false }
-        if let textView = responder as? NSTextView {
-            return textView.isFieldEditor
-        }
-        if responder is NSTextField {
-            return true
-        }
-        return false
-    }
-    
-    private func isDeleteKey(_ event: NSEvent) -> Bool {
-        return event.keyCode == 51 || event.keyCode == 117
-    }
-    
-    private func handleDeleteSelectedFile() -> Bool {
-        guard let controller = stateController, let path = controller.selectedAppPath else {
-            return false
-        }
-        let url = URL(fileURLWithPath: path)
-        
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            Logger.shared.log("Selected file missing at path: \(url.path)")
-            controller.selectedAppPath = nil
-            updateAppButtonTitle()
-            return true
-        }
-        
-        do {
-            var resultingURL: NSURL?
-            try FileManager.default.trashItem(at: url, resultingItemURL: &resultingURL)
-            controller.selectedAppPath = nil
-            updateAppButtonTitle()
-            return true
-        } catch {
-            Logger.shared.log("Failed to move to Trash: \(url.path). Error: \(error)")
-            presentDeleteErrorAlert(message: error.localizedDescription)
-            return true
-        }
-    }
-    
-    private func presentDeleteErrorAlert(message: String) {
-        let alert = NSAlert()
-        if isSystemRussian {
-            alert.messageText = "Не удалось переместить в Корзину"
-            alert.addButton(withTitle: "ОК")
-        } else {
-            alert.messageText = "Unable to Move to Trash"
-            alert.addButton(withTitle: "OK")
-        }
-        alert.informativeText = message
-        alert.alertStyle = .warning
-        
-        if let window = view.window ?? NSApp.keyWindow {
-            alert.beginSheetModal(for: window, completionHandler: nil)
-        } else {
-            alert.runModal()
-        }
     }
 }
