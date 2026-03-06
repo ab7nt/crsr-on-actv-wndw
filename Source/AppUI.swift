@@ -46,6 +46,8 @@ struct L10n {
         "dialog_title": "Select application to launch",
         "launch_start": "Launch on Start",
         "hide_dock": "Hide Dock Icon",
+        "hide_back_to_dock": "Hide Back to Dock",
+        "hide_back_to_dock_sub": "On repeated click on its Dock icon",
         "quit": "Quit App",
         "finder_delete": "Delete files with Delete key",
         "finder_delete_sub": "Works in Finder (instead of ⌘ + Delete)",
@@ -66,6 +68,8 @@ struct L10n {
         "dialog_title": "Выберите приложение для запуска",
         "launch_start": "Запускать при старте",
         "hide_dock": "Убрать иконку из Dock",
+        "hide_back_to_dock": "Скрывать обратно в Dock",
+        "hide_back_to_dock_sub": "При повторном клике по его иконке",
         "quit": "Завершить",
         "finder_delete": "Удалять файлы клавишей Delete",
         "finder_delete_sub": "Работает в Finder (вместо ⌘ + Delete)"
@@ -104,6 +108,7 @@ class SettingsViewController: NSViewController {
     private var launchCheckbox: NSButton!
     private var dockCheckbox: NSButton!
     private var finderDeleteSwitch: NSSwitch!
+    private var hideBackToDockSwitch: NSSwitch!
     
     override func loadView() {
         let rootView = SettingsRootView(frame: NSRect(x: 0, y: 0, width: 420, height: 600))
@@ -147,6 +152,9 @@ class SettingsViewController: NSViewController {
         
         // Finder Delete
         finderDeleteSwitch.state = (stateController?.isFinderDeleteEnabled ?? false) ? .on : .off
+
+        // Hide back to Dock on repeated Dock icon click
+        hideBackToDockSwitch.state = UserDefaults.standard.bool(forKey: "HideBackToDockOnReopen") ? .on : .off
     }
     
     private func setupUI() {
@@ -229,7 +237,15 @@ class SettingsViewController: NSViewController {
         ))
 
         
-        // 4. Open App (3-Finger Double Tap)
+        // 4. Hide back to Dock on repeated Dock icon click
+        mainStack.addArrangedSubview(createSwitchRow(
+            title: L10n.get("hide_back_to_dock"),
+            subtitle: L10n.get("hide_back_to_dock_sub"),
+            switchObj: &hideBackToDockSwitch,
+            action: #selector(toggleHideBackToDock(_:))
+        ))
+
+        // 5. Open App (3-Finger Double Tap)
         let appLaunchRow = createSwitchRow(
             title: L10n.get("app_title"),
             subtitle: L10n.get("app_subtitle"),
@@ -508,6 +524,12 @@ class SettingsViewController: NSViewController {
     @objc func toggleFinderDelete(_ sender: NSButton) {
         let enabled = stateController?.setFinderDeleteEnabledFromUser(sender.state == .on) ?? false
         sender.state = enabled ? .on : .off
+    }
+
+    @objc func toggleHideBackToDock(_ sender: NSSwitch) {
+        let enabled = (sender.state == .on)
+        UserDefaults.standard.set(enabled, forKey: "HideBackToDockOnReopen")
+        Logger.shared.log("[DockReopen] setting HideBackToDockOnReopen=\(enabled)")
     }
     
 

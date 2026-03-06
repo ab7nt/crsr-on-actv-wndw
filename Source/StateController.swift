@@ -19,6 +19,13 @@ class StateController: MouseTrackerDelegate {
     private var clickMonitorLocal: Any? // Added separate handle for local
     private var finderDeleteMonitorGlobal: Any?
     private var finderDeleteMonitorLocal: Any?
+    private var dockMinimizeMouseDownMonitorGlobal: Any?
+    private var dockMinimizeMonitorGlobal: Any?
+    private var lastDockMinimizeAttemptAt: TimeInterval = 0
+    private var lastDockMouseDownFrontmostPID: pid_t?
+    private var lastDockMouseDownItemName: String?
+    private var lastDockMouseDownAt: TimeInterval = 0
+    private var lastDockMouseDownHadUnminimizedFocusedWindow: Bool = false
     private var didShowFinderAutomationAlert = false
     private var finderDeleteWasActiveBeforeSuspend = false
     
@@ -166,6 +173,7 @@ class StateController: MouseTrackerDelegate {
         self.mouseTracker.delegate = self
         
         setupClickMonitoring()
+        setupDockMinimizeMonitoring()
         setupSpaceObserver()
         setupGestures()
         setupTrackpadGestures()
@@ -182,6 +190,12 @@ class StateController: MouseTrackerDelegate {
             NSEvent.removeMonitor(monitor)
         }
         if let monitor = finderDeleteMonitorLocal {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = dockMinimizeMonitorGlobal {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = dockMinimizeMouseDownMonitorGlobal {
             NSEvent.removeMonitor(monitor)
         }
         NSWorkspace.shared.notificationCenter.removeObserver(self)
@@ -229,6 +243,217 @@ class StateController: MouseTrackerDelegate {
         } else {
             TrackpadListener.shared.stop()
         }
+    }
+
+    // MARK: - Dock Re-click Minimize (Global)
+
+    private func setupDockMinimizeMonitoring() {
+        if dockMinimizeMouseDownMonitorGlobal == nil {
+            dockMinimizeMouseDownMonitorGlobal = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+                self?.handleDockMouseDownSnapshot(event)
+            }
+        }
+        guard dockMinimizeMonitorGlobal == nil else { return }
+        dockMinimizeMonitorGlobal = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
+            self?.handleDockMouseDown(event)
+        }
+    }
+
+    private func handleDockMouseDownSnapshot(_ event: NSEvent) {
+        lastDockMouseDownAt = ProcessInfo.processInfo.systemUptime
+        if let frontmost = NSWorkspace.shared.frontmostApplication {
+            lastDockMouseDownFrontmostPID = frontmost.processIdentifier
+            lastDockMouseDownHadUnminimizedFocusedWindow = hasUnminimizedFocusedWindow(of: frontmost)
+        } else {
+            lastDockMouseDownFrontmostPID = nil
+            lastDockMouseDownHadUnminimizedFocusedWindow = false
+        }
+        lastDockMouseDownItemName = dockApplicationItemName(at: event.locationInWindow)
+    }
+
+    private func handleDockMouseDown(_ event: NSEvent) {
+        guard UserDefaults.standard.bool(forKey: "HideBackToDockOnReopen") else {
+            Logger.shared.log("[DockMinimize] ignored: setting disabled")
+            return
+        }
+        guard WindowDetector.isAccessibilityTrusted() else {
+            Logger.shared.log("[DockMinimize] ignored: accessibility not trusted")
+            return
+        }
+
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastDockMinimizeAttemptAt < 0.2 {
+            Logger.shared.log("[DockMinimize] ignored: debounce")
+            return
+        }
+        lastDockMinimizeAttemptAt = now
+
+        guard let activeApp = NSWorkspace.shared.frontmostApplication else {
+            Logger.shared.log("[DockMinimize] ignored: no frontmost app")
+            return
+        }
+        guard let activeName = activeApp.localizedName?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !activeName.isEmpty else {
+            Logger.shared.log("[DockMinimize] ignored: frontmost app has empty name")
+            return
+        }
+
+        let clickPoint = event.locationInWindow
+        guard let dockItemName = dockApplicationItemName(at: clickPoint) else {
+            Logger.shared.log("[DockMinimize] ignored: click at \(clickPoint) is not Dock app item")
+            return
+        }
+        guard dockItemName.caseInsensitiveCompare(activeName) == .orderedSame else {
+            Logger.shared.log("[DockMinimize] ignored: dock item '\(dockItemName)' != frontmost '\(activeName)'")
+            return
+        }
+
+        let downAge = ProcessInfo.processInfo.systemUptime - lastDockMouseDownAt
+        guard downAge >= 0, downAge < 1.0 else {
+            Logger.shared.log("[DockMinimize] ignored: stale mousedown snapshot, age=\(String(format: "%.3f", downAge))")
+            return
+        }
+        guard let downPID = lastDockMouseDownFrontmostPID,
+              downPID == activeApp.processIdentifier else {
+            Logger.shared.log("[DockMinimize] ignored: app was not active on mousedown")
+            return
+        }
+        guard let downItem = lastDockMouseDownItemName,
+              downItem.caseInsensitiveCompare(activeName) == .orderedSame else {
+            Logger.shared.log("[DockMinimize] ignored: mousedown dock item mismatch (down='\(lastDockMouseDownItemName ?? "nil")', active='\(activeName)')")
+            return
+        }
+        guard lastDockMouseDownHadUnminimizedFocusedWindow else {
+            Logger.shared.log("[DockMinimize] ignored: app had no unminimized focused window on mousedown")
+            return
+        }
+
+        Logger.shared.log("[DockMinimize] match: dock item '\(dockItemName)', frontmost '\(activeName)', scheduling minimize")
+
+        // Run after Dock finishes processing the click, otherwise the app can be re-activated immediately.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+            guard let self else { return }
+            guard let currentFrontmost = NSWorkspace.shared.frontmostApplication,
+                  currentFrontmost.processIdentifier == activeApp.processIdentifier else {
+                let currentName = NSWorkspace.shared.frontmostApplication?.localizedName ?? "nil"
+                Logger.shared.log("[DockMinimize] canceled after delay: frontmost changed to '\(currentName)'")
+                return
+            }
+            Logger.shared.log("[DockMinimize] executing minimize for '\(activeName)'")
+            self.minimizeFocusedWindow(of: activeApp)
+        }
+    }
+
+    private func dockApplicationItemName(at cocoaPoint: CGPoint) -> String? {
+        guard let dockApp = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first else {
+            return nil
+        }
+
+        guard let primaryScreen = NSScreen.screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.main else {
+            return nil
+        }
+        let axY = primaryScreen.frame.height - cocoaPoint.y
+
+        let dockAX = AXUIElementCreateApplication(dockApp.processIdentifier)
+        var hitElement: AXUIElement?
+        let hitResult = AXUIElementCopyElementAtPosition(dockAX, Float(cocoaPoint.x), Float(axY), &hitElement)
+        guard hitResult == .success, let element = hitElement else {
+            return nil
+        }
+
+        var subroleValue: AnyObject?
+        let subroleResult = AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subroleValue)
+        guard subroleResult == .success,
+              let subrole = subroleValue as? String,
+              subrole == "AXApplicationDockItem" else {
+            return nil
+        }
+
+        var titleValue: AnyObject?
+        let titleResult = AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &titleValue)
+        guard titleResult == .success,
+              let title = (titleValue as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !title.isEmpty else {
+            return nil
+        }
+
+        return title
+    }
+
+    private func minimizeFocusedWindow(of app: NSRunningApplication) {
+        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+        var focusedWindow: AnyObject?
+        let result = AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focusedWindow)
+        guard result == .success, let windowEl = focusedWindow as! AXUIElement? else {
+            Logger.shared.log("[DockMinimize] AX focused window unavailable for '\(app.localizedName ?? "unknown")', result=\(result.rawValue)")
+            return
+        }
+
+        let appName = app.localizedName ?? "unknown"
+        let beforeMinimized = readWindowMinimizedState(windowEl)
+
+        let setResult = AXUIElementSetAttributeValue(windowEl, kAXMinimizedAttribute as CFString, kCFBooleanTrue)
+        let afterSetMinimized = readWindowMinimizedState(windowEl)
+        Logger.shared.log("[DockMinimize] AX set minimized '\(appName)': setResult=\(setResult.rawValue), before=\(String(describing: beforeMinimized)), afterSet=\(String(describing: afterSetMinimized))")
+
+        if afterSetMinimized == true {
+            return
+        }
+
+        if pressWindowMinimizeButton(windowEl) {
+            let afterPressMinimized = readWindowMinimizedState(windowEl)
+            Logger.shared.log("[DockMinimize] AX minimize button '\(appName)': afterPress=\(String(describing: afterPressMinimized))")
+            if afterPressMinimized == true {
+                return
+            }
+        } else {
+            Logger.shared.log("[DockMinimize] AX minimize button unavailable for '\(appName)'")
+        }
+
+        let sentCmdM = sendCmdM()
+        Logger.shared.log("[DockMinimize] fallback Cmd+M for '\(appName)': sent=\(sentCmdM)")
+    }
+
+    private func hasUnminimizedFocusedWindow(of app: NSRunningApplication) -> Bool {
+        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+        var focusedWindow: AnyObject?
+        let result = AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focusedWindow)
+        guard result == .success, let windowEl = focusedWindow as! AXUIElement? else {
+            return false
+        }
+        let minimized = readWindowMinimizedState(windowEl)
+        return minimized == false
+    }
+
+    private func readWindowMinimizedState(_ windowEl: AXUIElement) -> Bool? {
+        var value: AnyObject?
+        let result = AXUIElementCopyAttributeValue(windowEl, kAXMinimizedAttribute as CFString, &value)
+        guard result == .success else { return nil }
+        return (value as? NSNumber)?.boolValue
+    }
+
+    private func pressWindowMinimizeButton(_ windowEl: AXUIElement) -> Bool {
+        var buttonValue: AnyObject?
+        let buttonResult = AXUIElementCopyAttributeValue(windowEl, kAXMinimizeButtonAttribute as CFString, &buttonValue)
+        guard buttonResult == .success, let buttonEl = buttonValue as! AXUIElement? else {
+            return false
+        }
+        let pressResult = AXUIElementPerformAction(buttonEl, kAXPressAction as CFString)
+        return pressResult == .success
+    }
+
+    private func sendCmdM() -> Bool {
+        guard let source = CGEventSource(stateID: .combinedSessionState) else {
+            return false
+        }
+        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 46, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 46, keyDown: false) else {
+            return false
+        }
+        keyDown.flags = .maskCommand
+        keyDown.post(tap: .cghidEventTap)
+        keyUp.post(tap: .cghidEventTap)
+        return true
     }
 
     // MARK: - Finder Delete (Global)

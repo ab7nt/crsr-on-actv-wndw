@@ -1,4 +1,5 @@
 import Cocoa
+import Carbon
 
 class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     
@@ -12,13 +13,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
     
     // Preference Key
     private let kHideDockIcon = "HideDockIcon"
+    private let kHideBackToDockOnReopen = "HideBackToDockOnReopen"
     private let kStartupDefaultsInitialized = "StartupDefaultsInitialized"
+    private var lastDockReopenHandledAt: TimeInterval = 0
+    
+    private func windowStateDescription() -> String {
+        guard let window else { return "window=nil" }
+        return "visible=\(window.isVisible) miniaturized=\(window.isMiniaturized) key=\(window.isKeyWindow) main=\(window.isMainWindow)"
+    }
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
-        if AppMoveHelper.shared.promptToMoveIfNeeded() {
-            return
-        }
-
         if !UserDefaults.standard.bool(forKey: kStartupDefaultsInitialized) {
             LaunchManager.shared.isLaunchAtLoginEnabled = false
             UserDefaults.standard.set(false, forKey: kHideDockIcon)
@@ -35,6 +39,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         
         // 3. Setup Main Window
         setupMainWindow()
+        setupDockReopenHandler()
+        Logger.shared.log("[DockReopen] app launched, handler installed, hideBackToDock=\(UserDefaults.standard.bool(forKey: kHideBackToDockOnReopen)), \(windowStateDescription())")
     }
     
     func updateActivationPolicy() {
@@ -146,7 +152,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
     }
 
     func setupMainWindow() {
-        let windowSize = NSSize(width: 420, height: 450)
+        let windowSize = NSSize(width: 420, height: 550)
         let screenSize = NSScreen.main?.frame.size ?? .zero
         let rect = NSRect(x: (screenSize.width - windowSize.width) / 2,
                           y: (screenSize.height - windowSize.height) / 2,
@@ -166,14 +172,55 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         
-        window.minSize = NSSize(width: 420, height: 500)
-        window.maxSize = NSSize(width: 420, height: 500)
+        window.minSize = NSSize(width: 420, height: 550)
+        window.maxSize = NSSize(width: 420, height: 550)
         
         settingsViewController = SettingsViewController()
         settingsViewController.stateController = stateController
         
         window.contentViewController = settingsViewController
         window.makeKeyAndOrderFront(nil)
+    }
+
+    private func setupDockReopenHandler() {
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleReopenAppleEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kCoreEventClass),
+            andEventID: AEEventID(kAEReopenApplication)
+        )
+        Logger.shared.log("[DockReopen] setupDockReopenHandler done")
+    }
+
+    private func handleDockReopenAction() -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        let delta = now - lastDockReopenHandledAt
+        let shouldHideBackToDock = UserDefaults.standard.bool(forKey: kHideBackToDockOnReopen)
+        Logger.shared.log("[DockReopen] action start, shouldHideBackToDock=\(shouldHideBackToDock), delta=\(String(format: "%.3f", delta)), \(windowStateDescription())")
+
+        if now - lastDockReopenHandledAt < 0.25 {
+            Logger.shared.log("[DockReopen] ignored due to debounce")
+            return true
+        }
+        lastDockReopenHandledAt = now
+
+        if window == nil {
+            Logger.shared.log("[DockReopen] window nil -> setupMainWindow")
+            setupMainWindow()
+            return true
+        }
+
+        if shouldHideBackToDock, window.isVisible, !window.isMiniaturized {
+            Logger.shared.log("[DockReopen] miniaturize current window")
+            window.miniaturize(nil)
+            Logger.shared.log("[DockReopen] after miniaturize, \(windowStateDescription())")
+            return true
+        }
+
+        Logger.shared.log("[DockReopen] makeKeyAndOrderFront")
+        window.makeKeyAndOrderFront(nil)
+        Logger.shared.log("[DockReopen] after makeKeyAndOrderFront, \(windowStateDescription())")
+        return true
     }
     
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -182,19 +229,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
     
     func applicationDidBecomeActive(_ notification: Notification) {
         updateActivationPolicy()
-        if window != nil {
+        Logger.shared.log("[DockReopen] applicationDidBecomeActive, \(windowStateDescription())")
+        if window != nil, !window.isMiniaturized, !window.isVisible {
+            Logger.shared.log("[DockReopen] becomeActive -> makeKeyAndOrderFront")
             window.makeKeyAndOrderFront(nil)
         }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         updateActivationPolicy()
-        if window == nil {
-            setupMainWindow()
-        } else {
-            window.makeKeyAndOrderFront(nil)
-        }
-        return true
+        Logger.shared.log("[DockReopen] applicationShouldHandleReopen called, hasVisibleWindows=\(flag), \(windowStateDescription())")
+        return handleDockReopenAction()
+    }
+
+    @objc private func handleReopenAppleEvent(_ event: NSAppleEventDescriptor, withReplyEvent replyEvent: NSAppleEventDescriptor) {
+        updateActivationPolicy()
+        Logger.shared.log("[DockReopen] AppleEvent reopen received, \(windowStateDescription())")
+        _ = handleDockReopenAction()
     }
     
     func applicationWillTerminate(_ aNotification: Notification) {
