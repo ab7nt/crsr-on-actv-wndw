@@ -10,6 +10,7 @@ RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 
 echo "🧹 Cleaning..."
 rm -rf "$APP_BUNDLE"
+rm -rf "AbsentweaksV2.app"
 rm -f "$APP_NAME"
 
 echo "🏗  Compiling..."
