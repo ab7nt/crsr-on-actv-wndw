@@ -454,11 +454,7 @@ class StateController: MouseTrackerDelegate {
             guard self.isSpacesSwipeEnabled else { return }
             
             guard direction == .left || direction == .right else { return }
-            
-            guard self.windowDetector.getActiveWindowID() != nil else {
-                return
-            }
-            
+
             if direction == .left {
                 DisplayMover.shared.moveActiveWindowToNextDisplay()
             } else if direction == .right {

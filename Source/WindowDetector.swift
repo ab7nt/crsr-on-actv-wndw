@@ -45,16 +45,16 @@ class WindowDetector {
         
         guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedApplicationAttribute as CFString, &focusedApp) == .success,
               let axApp = focusedApp as! AXUIElement? else {
-            return nil
+            Logger.shared.log("[WindowDetector] focused application unavailable, trying fallbacks")
+            return getActiveWindowElementFallbacks()
         }
-        
-        var focusedWindow: AnyObject?
-        guard AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focusedWindow) == .success,
-              let windowElement = focusedWindow as! AXUIElement? else {
-            return nil
+
+        if let window = resolveWindow(fromAppElement: axApp) {
+            return window
         }
-        
-        return windowElement
+
+        Logger.shared.log("[WindowDetector] focused app window unavailable, trying frontmost/cursor fallbacks")
+        return getActiveWindowElementFallbacks()
     }
 
     /// Returns the Frame of the currently focused window using Accessibility API
@@ -142,4 +142,73 @@ class WindowDetector {
         return nil
     }
 
+    private func getActiveWindowElementFallbacks() -> AXUIElement? {
+        if let app = NSWorkspace.shared.frontmostApplication {
+            let axApp = AXUIElementCreateApplication(app.processIdentifier)
+            if let window = resolveWindow(fromAppElement: axApp) {
+                return window
+            }
+            Logger.shared.log("[WindowDetector] frontmost app '\(app.localizedName ?? "unknown")' has no resolvable AX window")
+        }
+
+        if let cursorWindow = windowElementUnderCursor() {
+            return cursorWindow
+        }
+
+        Logger.shared.log("[WindowDetector] all fallbacks failed to resolve active window")
+        return nil
+    }
+
+    private func resolveWindow(fromAppElement axApp: AXUIElement) -> AXUIElement? {
+        var focusedWindow: AnyObject?
+        if AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focusedWindow) == .success,
+           let windowElement = focusedWindow as! AXUIElement? {
+            return windowElement
+        }
+
+        var mainWindow: AnyObject?
+        if AXUIElementCopyAttributeValue(axApp, kAXMainWindowAttribute as CFString, &mainWindow) == .success,
+           let mainWindowElement = mainWindow as! AXUIElement? {
+            return mainWindowElement
+        }
+
+        var windowsValue: AnyObject?
+        if AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsValue) == .success,
+           let windows = windowsValue as? [AXUIElement],
+           let firstWindow = windows.first {
+            return firstWindow
+        }
+
+        return nil
+    }
+
+    private func windowElementUnderCursor() -> AXUIElement? {
+        let systemWide = AXUIElementCreateSystemWide()
+        var hitElement: AXUIElement?
+
+        let mouse = NSEvent.mouseLocation
+        let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.main
+        let primaryHeight = primary?.frame.height ?? 0
+        let axY = primaryHeight - mouse.y
+
+        let hitResult = AXUIElementCopyElementAtPosition(systemWide, Float(mouse.x), Float(axY), &hitElement)
+        guard hitResult == .success, let element = hitElement else {
+            return nil
+        }
+
+        var windowValue: AnyObject?
+        if AXUIElementCopyAttributeValue(element, kAXWindowAttribute as CFString, &windowValue) == .success,
+           let window = windowValue as! AXUIElement? {
+            return window
+        }
+
+        var roleValue: AnyObject?
+        if AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleValue) == .success,
+           let role = roleValue as? String,
+           role == kAXWindowRole as String {
+            return element
+        }
+
+        return nil
+    }
 }
