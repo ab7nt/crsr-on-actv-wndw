@@ -14,6 +14,8 @@ class SwipeTracker {
     private var scrollMonitor: Any?
     private var lastSwipeTime: TimeInterval = 0
     private let debounceInterval: TimeInterval = 1.0 // Increased to 1.0s to prevent double triggers on inertia
+    private var isPhasedScrollActive = false
+    private var isCommandScrollArmed = false
     
     var onSwipe: SwipeAction?
     
@@ -67,11 +69,32 @@ class SwipeTracker {
     private func handleScroll(_ event: NSEvent) {
         // Debug Log
         // Logger.shared.log("Scroll Event: Phase:\(event.phase.rawValue) Modifiers:\(event.modifierFlags.rawValue) DeltaY:\(event.scrollingDeltaY)")
+
+        switch event.phase {
+        case .began:
+            isPhasedScrollActive = true
+            isCommandScrollArmed = event.modifierFlags.contains(.command)
+        case .ended, .cancelled:
+            isPhasedScrollActive = false
+            isCommandScrollArmed = false
+        default:
+            break
+        }
+
+        // Ignore all momentum (inertia) events.
+        if event.momentumPhase != [] {
+            return
+        }
         
         guard Date().timeIntervalSince1970 - lastSwipeTime > debounceInterval else { return }
-        
-        // REQUIREMENT: Command Key must be held down
-        if !event.modifierFlags.contains(.command) { return }
+
+        if isPhasedScrollActive {
+            // For trackpad gestures with phases, Command must be held at gesture start.
+            guard isCommandScrollArmed, event.modifierFlags.contains(.command) else { return }
+        } else {
+            // Fallback for devices that report phase == .none.
+            guard event.modifierFlags.contains(.command) else { return }
+        }
         
         let now = Date().timeIntervalSince1970
         

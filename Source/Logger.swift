@@ -4,6 +4,7 @@ import os.log
 class Logger {
     static let shared = Logger()
     private let osLog = OSLog(subsystem: "com.user.absentweaks", category: "Application")
+    private let mutedPrefixes = ["[DockReopen]", "[DockMinimize]"]
     private let formatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         return f
@@ -11,6 +12,9 @@ class Logger {
     
     // Simple console logging for debugging if needed
     func log(_ message: String) {
+        if mutedPrefixes.contains(where: { message.hasPrefix($0) }) {
+            return
+        }
         let timestamp = formatter.string(from: Date())
         print("[\(timestamp)] \(message)")
         // Also send to system log
