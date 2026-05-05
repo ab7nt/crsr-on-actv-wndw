@@ -2,6 +2,36 @@ import Cocoa
 
 typealias MTContactCallback = @convention(c) (UnsafeMutableRawPointer, UnsafeMutableRawPointer?, Int32, Double, Int32) -> Void
 
+private struct MTPoint {
+    var x: Float
+    var y: Float
+}
+
+private struct MTVector {
+    var position: MTPoint
+    var velocity: MTPoint
+}
+
+private struct MTContact {
+    var frame: Int32
+    var timestamp: Double
+    var identifier: Int32
+    var state: Int32
+    var fingerID: Int32
+    var handID: Int32
+    var normalizedVector: MTVector
+    var size: Float
+    var zero1: Int32
+    var angle: Float
+    var majorAxis: Float
+    var minorAxis: Float
+    var normalizedPosition: MTPoint
+    var devicePosition: MTPoint
+    var zero2: Int32
+    var zero3: Int32
+    var unknown: Float
+}
+
 class TrackpadListener {
     static let shared = TrackpadListener()
     
@@ -22,9 +52,12 @@ class TrackpadListener {
     private var touchActiveStartTs: TimeInterval?
     private var firstThreeFingerTs: TimeInterval?
     private var maxFingersSeenInTouch = 0
+    private var initialThreeFingerCentroid: CGPoint?
+    private var didMoveTooMuchForTap = false
     
     // Tunables
     private let maxTapDuration: TimeInterval = 0.35
+    private let maxTapMovement: CGFloat = 0.035
     
     // Paths and Framework Handles
     private var frameworkHandle: UnsafeMutableRawPointer?
@@ -128,11 +161,11 @@ class TrackpadListener {
 }
 
 private func globalContactCallback(device: UnsafeMutableRawPointer, frameData: UnsafeMutableRawPointer?, numFingers: Int32, timestamp: Double, frameID: Int32) {
-    TrackpadListener.shared.handleCallback(fingers: Int(numFingers), timestamp: timestamp)
+    TrackpadListener.shared.handleCallback(fingers: Int(numFingers), timestamp: timestamp, frameData: frameData)
 }
 
 extension TrackpadListener {
-    func handleCallback(fingers: Int, timestamp: Double) {
+    func handleCallback(fingers: Int, timestamp: Double, frameData: UnsafeMutableRawPointer? = nil) {
         guard isEnabled else { return }
         
         // Prefer the provided MT timestamp if it looks sane; fall back to wall clock.
@@ -143,6 +176,8 @@ extension TrackpadListener {
             touchActiveStartTs = nowTs
             firstThreeFingerTs = nil
             maxFingersSeenInTouch = fingers
+            initialThreeFingerCentroid = nil
+            didMoveTooMuchForTap = false
         }
         
         // Update max fingers observed in this touch sequence
@@ -153,6 +188,17 @@ extension TrackpadListener {
         // First moment we reached 3 fingers in this touch sequence
         if fingers == 3, firstThreeFingerTs == nil {
             firstThreeFingerTs = nowTs
+            initialThreeFingerCentroid = threeFingerCentroid(from: frameData, fingers: fingers)
+        }
+        
+        if fingers == 3,
+           let initialThreeFingerCentroid,
+           let currentCentroid = threeFingerCentroid(from: frameData, fingers: fingers) {
+            let dx = currentCentroid.x - initialThreeFingerCentroid.x
+            let dy = currentCentroid.y - initialThreeFingerCentroid.y
+            if hypot(dx, dy) > maxTapMovement {
+                didMoveTooMuchForTap = true
+            }
         }
         
         // End of touch sequence (all fingers up)
@@ -164,7 +210,7 @@ extension TrackpadListener {
                 
                 // Consider it a 3-finger tap if we reached exactly 3 fingers
                 // and released soon after that moment.
-                if maxFingersSeenInTouch == 3, threeToRelease <= maxTapDuration {
+                if maxFingersSeenInTouch == 3, threeToRelease <= maxTapDuration, !didMoveTooMuchForTap {
                     DispatchQueue.main.async {
                         // If double tap is not configured, fire single tap immediately
                         guard self.onThreeFingerDoubleTap != nil else {
@@ -199,8 +245,33 @@ extension TrackpadListener {
             touchActiveStartTs = nil
             firstThreeFingerTs = nil
             maxFingersSeenInTouch = 0
+            initialThreeFingerCentroid = nil
+            didMoveTooMuchForTap = false
         }
         
         lastFingerCount = fingers
+    }
+    
+    private func threeFingerCentroid(from frameData: UnsafeMutableRawPointer?, fingers: Int) -> CGPoint? {
+        guard fingers == 3, let frameData else { return nil }
+        
+        let contacts = frameData.assumingMemoryBound(to: MTContact.self)
+        var sumX: CGFloat = 0
+        var sumY: CGFloat = 0
+        
+        for index in 0..<fingers {
+            let position = contacts[index].normalizedPosition
+            let x = CGFloat(position.x)
+            let y = CGFloat(position.y)
+            
+            guard x.isFinite, y.isFinite, (-0.1...1.1).contains(x), (-0.1...1.1).contains(y) else {
+                return nil
+            }
+            
+            sumX += x
+            sumY += y
+        }
+        
+        return CGPoint(x: sumX / CGFloat(fingers), y: sumY / CGFloat(fingers))
     }
 }

@@ -36,9 +36,11 @@ struct L10n {
         "lock_title": "Show the cursor lock icon",
         "lock_subtitle": "above the inactive window",
         "swipe_title": "Swipe window to another screen",
-        "swipe_subtitle": "⌘ + Scroll",
+        "swipe_subtitle": "⌃ (control) + Scroll",
         "middle_title": "Middle mouse button click",
         "middle_subtitle": "3-Finger Tap",
+        "middle_scroll_title": "Middle-button auto-scroll",
+        "middle_scroll_subtitle": "⌘ (command) + Scroll",
         "app_title": "Quick launch application",
         "app_subtitle": "3-Finger Double Tap",
         "select_app": "Select App...",
@@ -48,6 +50,8 @@ struct L10n {
         "hide_dock": "Hide Dock Icon",
         "hide_back_to_dock": "Hide Back to Dock",
         "hide_back_to_dock_sub": "on click on the active application's icon",
+        "activate_visible_title": "Activate visible app",
+        "activate_visible_subtitle": "after closing or minimizing the active app",
         "quit": "Quit App",
     ]
     
@@ -56,9 +60,11 @@ struct L10n {
         "lock_title": "Показывать иконку рядом с курсором",
         "lock_subtitle": "над неактивным окном",
         "swipe_title": "Перемещение окна на другой экран",
-        "swipe_subtitle": "⌘ + Скролл",
+        "swipe_subtitle": "⌃ (control) + Скролл",
         "middle_title": "Клик средней кнопкой мыши",
         "middle_subtitle": "касание 3 пальцами",
+        "middle_scroll_title": "Автоскролл как средней кнопкой мыши",
+        "middle_scroll_subtitle": "⌘ (command) + Скролл",
         "app_title": "Быстрый запуск приложения",
         "app_subtitle": "двойное касание 3 пальцами",
         "select_app": "Выбрать приложение...",
@@ -68,6 +74,8 @@ struct L10n {
         "hide_dock": "Убрать иконку из Dock",
         "hide_back_to_dock": "Скрывать обратно в Dock",
         "hide_back_to_dock_sub": "при клике по иконке активного приложения",
+        "activate_visible_title": "Активировать видимое приложение",
+        "activate_visible_subtitle": "после скрытия активного приложения",
         "quit": "Завершить"
     ]
 }
@@ -83,6 +91,7 @@ class SettingsViewController: NSViewController {
     private var lockSwitch: NSSwitch!
     private var swipeSwitch: NSSwitch!
     private var middleClickSwitch: NSSwitch!
+    private var middleScrollSwitch: NSSwitch!
     private var appLaunchSwitch: NSSwitch!
     private var appSelectionButton: NSButton!
     
@@ -90,9 +99,10 @@ class SettingsViewController: NSViewController {
     private var launchCheckbox: NSButton!
     private var dockCheckbox: NSButton!
     private var hideBackToDockSwitch: NSSwitch!
+    private var activateVisibleAppSwitch: NSSwitch!
     
     override func loadView() {
-        let rootView = SettingsRootView(frame: NSRect(x: 0, y: 0, width: 420, height: 600))
+        let rootView = SettingsRootView(frame: NSRect(x: 0, y: 0, width: 420, height: 620))
         self.view = rootView
     }
     
@@ -119,7 +129,9 @@ class SettingsViewController: NSViewController {
             lockSwitch.state = controller.isOverlayEnabled ? .on : .off
             swipeSwitch.state = controller.isSpacesSwipeEnabled ? .on : .off
             middleClickSwitch.state = controller.isMiddleClickGestureEnabled ? .on : .off
+            middleScrollSwitch.state = controller.isMiddleScrollGestureEnabled ? .on : .off
             appLaunchSwitch.state = controller.isAppLaunchEnabled ? .on : .off
+            activateVisibleAppSwitch.state = controller.isActivateVisibleAppEnabled ? .on : .off
             updateAppButtonTitle()
         }
         
@@ -189,7 +201,7 @@ class SettingsViewController: NSViewController {
             action: #selector(toggleLockIcon(_:))
         ))
         
-        // 2. Swipe window to another screen (Cmd + Scroll)
+        // 2. Swipe window to another screen (Control + Scroll)
         mainStack.addArrangedSubview(createSwitchRow(
             title: L10n.get("swipe_title"),
             subtitle: L10n.get("swipe_subtitle"),
@@ -205,6 +217,13 @@ class SettingsViewController: NSViewController {
             action: #selector(toggleMiddleClick(_:))
         ))
 
+        mainStack.addArrangedSubview(createSwitchRow(
+            title: L10n.get("middle_scroll_title"),
+            subtitle: L10n.get("middle_scroll_subtitle"),
+            switchObj: &middleScrollSwitch,
+            action: #selector(toggleMiddleScroll(_:))
+        ))
+
         // 4. Hide back to Dock on repeated Dock icon click
         mainStack.addArrangedSubview(createSwitchRow(
             title: L10n.get("hide_back_to_dock"),
@@ -213,7 +232,15 @@ class SettingsViewController: NSViewController {
             action: #selector(toggleHideBackToDock(_:))
         ))
 
-        // 5. Open App (3-Finger Double Tap)
+        // 5. Activate visible app after the active app loses its visible window
+        mainStack.addArrangedSubview(createSwitchRow(
+            title: L10n.get("activate_visible_title"),
+            subtitle: L10n.get("activate_visible_subtitle"),
+            switchObj: &activateVisibleAppSwitch,
+            action: #selector(toggleActivateVisibleApp(_:))
+        ))
+
+        // 6. Open App (3-Finger Double Tap)
         let appLaunchRow = createSwitchRow(
             title: L10n.get("app_title"),
             subtitle: L10n.get("app_subtitle"),
@@ -391,6 +418,11 @@ class SettingsViewController: NSViewController {
         sender.state = enabled ? .on : .off
     }
 
+    @objc func toggleMiddleScroll(_ sender: NSSwitch) {
+        let enabled = stateController?.setMiddleScrollGestureEnabledFromUser(sender.state == .on) ?? false
+        sender.state = enabled ? .on : .off
+    }
+
     @objc func toggleAppLaunch(_ sender: NSSwitch) {
          stateController?.isAppLaunchEnabled = (sender.state == .on)
          updateAppButtonTitle()
@@ -493,5 +525,11 @@ class SettingsViewController: NSViewController {
         let enabled = (sender.state == .on)
         UserDefaults.standard.set(enabled, forKey: "HideBackToDockOnReopen")
         Logger.shared.log("[DockReopen] setting HideBackToDockOnReopen=\(enabled)")
+    }
+
+    @objc func toggleActivateVisibleApp(_ sender: NSSwitch) {
+        let enabled = stateController?.setActivateVisibleAppEnabledFromUser(sender.state == .on) ?? false
+        sender.state = enabled ? .on : .off
+        Logger.shared.log("[ActivateVisible] setting EnableActivateVisibleApp=\(enabled)")
     }
 }

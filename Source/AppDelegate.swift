@@ -152,7 +152,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
     }
 
     func setupMainWindow() {
-        let windowSize = NSSize(width: 420, height: 550)
+        let windowSize = NSSize(width: 420, height: 620)
         let screenSize = NSScreen.main?.frame.size ?? .zero
         let rect = NSRect(x: (screenSize.width - windowSize.width) / 2,
                           y: (screenSize.height - windowSize.height) / 2,
@@ -172,8 +172,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         
-        window.minSize = NSSize(width: 420, height: 550)
-        window.maxSize = NSSize(width: 420, height: 550)
+        window.minSize = NSSize(width: 420, height: 620)
+        window.maxSize = NSSize(width: 420, height: 620)
         
         settingsViewController = SettingsViewController()
         settingsViewController.stateController = stateController

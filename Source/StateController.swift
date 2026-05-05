@@ -19,11 +19,21 @@ class StateController: MouseTrackerDelegate {
     private var clickMonitorLocal: Any? // Added separate handle for local
     private var dockMinimizeMouseDownMonitorGlobal: Any?
     private var dockMinimizeMonitorGlobal: Any?
+    private var activateVisibleMouseUpMonitorGlobal: Any?
+    private var activateVisibleMouseUpMonitorLocal: Any?
     private var lastDockMinimizeAttemptAt: TimeInterval = 0
+    private var lastActivateVisibleRepairAt: TimeInterval = 0
     private var lastDockMouseDownFrontmostPID: pid_t?
     private var lastDockMouseDownItemName: String?
     private var lastDockMouseDownAt: TimeInterval = 0
     private var lastDockMouseDownHadUnminimizedFocusedWindow: Bool = false
+    private var isMiddleAutoScrollActive = false
+    private var middleAutoScrollVelocityX: CGFloat = 0
+    private var middleAutoScrollVelocityY: CGFloat = 0
+    private var middleAutoScrollResidualX: CGFloat = 0
+    private var middleAutoScrollResidualY: CGFloat = 0
+    private var middleAutoScrollLastImpulseAt: TimeInterval = 0
+    private var middleAutoScrollTimer: DispatchSourceTimer?
     
     // User Preferences
     var isSpacesSwipeEnabled: Bool {
@@ -58,6 +68,16 @@ class StateController: MouseTrackerDelegate {
             updateTrackpadListenerState()
             setupAppLauncher()
         }
+    }
+
+    var isMiddleScrollGestureEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "EnableMiddleScrollGesture") }
+        set { UserDefaults.standard.set(newValue, forKey: "EnableMiddleScrollGesture") }
+    }
+
+    var isActivateVisibleAppEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "EnableActivateVisibleApp") }
+        set { UserDefaults.standard.set(newValue, forKey: "EnableActivateVisibleApp") }
     }
     
     var selectedAppPath: String? {
@@ -107,6 +127,34 @@ class StateController: MouseTrackerDelegate {
         return true
     }
 
+    func setMiddleScrollGestureEnabledFromUser(_ enabled: Bool) -> Bool {
+        guard enabled else {
+            isMiddleScrollGestureEnabled = false
+            return false
+        }
+
+        guard ensureAccessibilityPermissionRequested() else {
+            return false
+        }
+
+        isMiddleScrollGestureEnabled = true
+        return true
+    }
+
+    func setActivateVisibleAppEnabledFromUser(_ enabled: Bool) -> Bool {
+        guard enabled else {
+            isActivateVisibleAppEnabled = false
+            return false
+        }
+
+        guard ensureAccessibilityPermissionRequested() else {
+            return false
+        }
+
+        isActivateVisibleAppEnabled = true
+        return true
+    }
+
     private func ensureAccessibilityPermissionRequested() -> Bool {
         if WindowDetector.isAccessibilityTrusted() {
             return true
@@ -129,6 +177,12 @@ class StateController: MouseTrackerDelegate {
         if UserDefaults.standard.object(forKey: "EnableAppLaunch") == nil {
             UserDefaults.standard.set(false, forKey: "EnableAppLaunch")
         }
+        if UserDefaults.standard.object(forKey: "EnableMiddleScrollGesture") == nil {
+            UserDefaults.standard.set(false, forKey: "EnableMiddleScrollGesture")
+        }
+        if UserDefaults.standard.object(forKey: "EnableActivateVisibleApp") == nil {
+            UserDefaults.standard.set(false, forKey: "EnableActivateVisibleApp")
+        }
         Logger.shared.log("App Started. Check Permissions: \(WindowDetector.isAccessibilityTrusted())")
         self.mouseTracker = MouseTracker()
         self.windowDetector = WindowDetector()
@@ -138,6 +192,7 @@ class StateController: MouseTrackerDelegate {
         
         setupClickMonitoring()
         setupDockMinimizeMonitoring()
+        setupActivateVisibleAppMonitoring()
         setupSpaceObserver()
         setupGestures()
         setupTrackpadGestures()
@@ -153,6 +208,12 @@ class StateController: MouseTrackerDelegate {
             NSEvent.removeMonitor(monitor)
         }
         if let monitor = dockMinimizeMouseDownMonitorGlobal {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = activateVisibleMouseUpMonitorGlobal {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = activateVisibleMouseUpMonitorLocal {
             NSEvent.removeMonitor(monitor)
         }
         NSWorkspace.shared.notificationCenter.removeObserver(self)
@@ -413,11 +474,167 @@ class StateController: MouseTrackerDelegate {
         return true
     }
 
+    // MARK: - Activate Visible App After Close/Minimize
+
+    private func setupActivateVisibleAppMonitoring() {
+        if activateVisibleMouseUpMonitorGlobal == nil {
+            activateVisibleMouseUpMonitorGlobal = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] _ in
+                self?.scheduleActivateVisibleAppRepair(reason: "global mouse up", cursorPoint: NSEvent.mouseLocation)
+            }
+        }
+
+        if activateVisibleMouseUpMonitorLocal == nil {
+            activateVisibleMouseUpMonitorLocal = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
+                self?.scheduleActivateVisibleAppRepair(reason: "local mouse up", cursorPoint: NSEvent.mouseLocation)
+                return event
+            }
+        }
+    }
+
+    private func scheduleActivateVisibleAppRepair(reason: String, cursorPoint: CGPoint) {
+        guard isActivateVisibleAppEnabled, !isSuspended else { return }
+        guard let targetScreen = screen(containing: cursorPoint) else { return }
+        let targetScreenFrame = targetScreen.frame
+
+        for delay in [0.12, 0.35] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.activateVisibleAppIfNeeded(reason: reason, targetScreenFrame: targetScreenFrame)
+            }
+        }
+    }
+
+    private func activateVisibleAppIfNeeded(reason: String, targetScreenFrame: CGRect) {
+        guard isActivateVisibleAppEnabled, !isSuspended else { return }
+        guard WindowDetector.isAccessibilityTrusted() else { return }
+        guard let primaryScreenHeight = NSScreen.screens.first?.frame.height else { return }
+
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastActivateVisibleRepairAt > 0.18 else { return }
+
+        guard let frontmost = NSWorkspace.shared.frontmostApplication else { return }
+        let frontmostPID = frontmost.processIdentifier
+
+        guard !hasVisibleNormalWindow(pid: frontmostPID, on: targetScreenFrame, primaryHeight: primaryScreenHeight) else {
+            return
+        }
+
+        guard let visibleApp = topVisibleNormalApplication(
+            excluding: frontmostPID,
+            on: targetScreenFrame,
+            primaryHeight: primaryScreenHeight
+        ) else {
+            Logger.shared.log("[ActivateVisible] no visible app found after \(reason)")
+            return
+        }
+
+        lastActivateVisibleRepairAt = now
+        let activated = visibleApp.activate(options: [.activateAllWindows])
+        Logger.shared.log("[ActivateVisible] frontmost '\(frontmost.localizedName ?? "unknown")' has no visible window on target screen after \(reason); activating '\(visibleApp.localizedName ?? "unknown")', result=\(activated)")
+    }
+
+    private func hasVisibleNormalWindow(pid: pid_t, on screenFrame: CGRect, primaryHeight: CGFloat) -> Bool {
+        visibleNormalWindowInfos().contains { info in
+            guard let ownerPID = info[kCGWindowOwnerPID as String] as? NSNumber else {
+                return false
+            }
+            guard ownerPID.int32Value == pid,
+                  let windowRect = cocoaWindowRect(from: info, primaryHeight: primaryHeight) else {
+                return false
+            }
+            return windowRect.intersects(screenFrame)
+        }
+    }
+
+    private func topVisibleNormalApplication(excluding excludedPID: pid_t, on screenFrame: CGRect, primaryHeight: CGFloat) -> NSRunningApplication? {
+        for info in visibleNormalWindowInfos() {
+            guard let ownerPID = info[kCGWindowOwnerPID as String] as? NSNumber else {
+                continue
+            }
+            guard let windowRect = cocoaWindowRect(from: info, primaryHeight: primaryHeight),
+                  windowRect.intersects(screenFrame) else {
+                continue
+            }
+
+            let pid = ownerPID.int32Value
+            guard pid != excludedPID,
+                  pid != NSRunningApplication.current.processIdentifier,
+                  let app = NSRunningApplication(processIdentifier: pid),
+                  let bundleID = app.bundleIdentifier,
+                  !isSafeBundle(bundleID) else {
+                continue
+            }
+
+            return app
+        }
+
+        return nil
+    }
+
+    private func screen(containing point: CGPoint) -> NSScreen? {
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) {
+            return screen
+        }
+
+        return NSScreen.screens.min { lhs, rhs in
+            distance(from: point, to: lhs.frame) < distance(from: point, to: rhs.frame)
+        }
+    }
+
+    private func distance(from point: CGPoint, to rect: CGRect) -> CGFloat {
+        let clampedX = min(max(point.x, rect.minX), rect.maxX)
+        let clampedY = min(max(point.y, rect.minY), rect.maxY)
+        return hypot(point.x - clampedX, point.y - clampedY)
+    }
+
+    private func cocoaWindowRect(from info: [String: Any], primaryHeight: CGFloat) -> CGRect? {
+        guard let bounds = info[kCGWindowBounds as String] as? [String: Any],
+              let x = bounds["X"] as? NSNumber,
+              let y = bounds["Y"] as? NSNumber,
+              let width = bounds["Width"] as? NSNumber,
+              let height = bounds["Height"] as? NSNumber else {
+            return nil
+        }
+
+        return CGRect(
+            x: x.doubleValue,
+            y: Double(primaryHeight) - (y.doubleValue + height.doubleValue),
+            width: width.doubleValue,
+            height: height.doubleValue
+        )
+    }
+
+    private func visibleNormalWindowInfos() -> [[String: Any]] {
+        guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            return []
+        }
+
+        return windowList.filter { info in
+            guard let layer = info[kCGWindowLayer as String] as? NSNumber,
+                  layer.intValue == 0 else {
+                return false
+            }
+
+            if let alpha = info[kCGWindowAlpha as String] as? NSNumber,
+               alpha.doubleValue <= 0.01 {
+                return false
+            }
+
+            guard let bounds = info[kCGWindowBounds as String] as? [String: Any],
+                  let width = bounds["Width"] as? NSNumber,
+                  let height = bounds["Height"] as? NSNumber else {
+                return false
+            }
+
+            return width.doubleValue >= 80 && height.doubleValue >= 40
+        }
+    }
+
     // MARK: - Suspension Logic
     
     func suspendForDialog() {
         Logger.shared.log("Suspending for Dialog...")
         isSuspended = true
+        stopMiddleAutoScroll(reason: "suspend")
         TrackpadListener.shared.stop()
         mouseTracker.stopTracking()
         swipeTracker?.stop()
@@ -445,6 +662,131 @@ class StateController: MouseTrackerDelegate {
         }
     }
 
+    private func handleCommandAutoScrollGesture(_ event: NSEvent) {
+        guard event.modifierFlags.contains(.command) else {
+            stopMiddleAutoScroll(reason: "command released")
+            return
+        }
+
+        if event.phase == .ended || event.phase == .cancelled {
+            stopMiddleAutoScroll(reason: "touch ended")
+            return
+        }
+
+        let now = ProcessInfo.processInfo.systemUptime
+        let elapsed = middleAutoScrollLastImpulseAt > 0 ? now - middleAutoScrollLastImpulseAt : 1.0 / 60.0
+        middleAutoScrollLastImpulseAt = now
+
+        let previousVelocityY = middleAutoScrollVelocityY
+        let previousVelocityX = middleAutoScrollVelocityX
+        middleAutoScrollVelocityY = accumulatedAutoScrollVelocity(
+            current: middleAutoScrollVelocityY,
+            delta: event.scrollingDeltaY,
+            elapsed: elapsed,
+            maxStep: 88
+        )
+        middleAutoScrollVelocityX = accumulatedAutoScrollVelocity(
+            current: middleAutoScrollVelocityX,
+            delta: event.scrollingDeltaX,
+            elapsed: elapsed,
+            maxStep: 72
+        )
+
+        let didChangeVelocity = abs(middleAutoScrollVelocityY - previousVelocityY) > 0.05 ||
+            abs(middleAutoScrollVelocityX - previousVelocityX) > 0.05
+        guard didChangeVelocity else { return }
+
+        if !isMiddleAutoScrollActive {
+            startMiddleAutoScroll()
+        }
+    }
+
+    private func startMiddleAutoScroll() {
+        guard !isMiddleAutoScrollActive else { return }
+        isMiddleAutoScrollActive = true
+        middleAutoScrollResidualX = 0
+        middleAutoScrollResidualY = 0
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(16))
+        timer.setEventHandler { [weak self] in
+            self?.emitMiddleAutoScrollStep()
+        }
+        middleAutoScrollTimer = timer
+        timer.resume()
+        Logger.shared.log("[MiddleAutoScroll] started")
+    }
+
+    private func stopMiddleAutoScroll(reason: String) {
+        guard isMiddleAutoScrollActive else { return }
+        isMiddleAutoScrollActive = false
+        middleAutoScrollVelocityX = 0
+        middleAutoScrollVelocityY = 0
+        middleAutoScrollResidualX = 0
+        middleAutoScrollResidualY = 0
+        middleAutoScrollLastImpulseAt = 0
+        middleAutoScrollTimer?.cancel()
+        middleAutoScrollTimer = nil
+        Logger.shared.log("[MiddleAutoScroll] stopped: \(reason)")
+    }
+
+    private func emitMiddleAutoScrollStep() {
+        guard isMiddleAutoScrollActive else { return }
+        guard let source = CGEventSource(stateID: .hidSystemState) else { return }
+
+        let wheel1 = scrollStep(from: middleAutoScrollVelocityY, residual: &middleAutoScrollResidualY)
+        let wheel2 = scrollStep(from: middleAutoScrollVelocityX, residual: &middleAutoScrollResidualX)
+        guard wheel1 != 0 || wheel2 != 0 else { return }
+
+        guard let event = CGEvent(
+            scrollWheelEvent2Source: source,
+            units: .pixel,
+            wheelCount: 2,
+            wheel1: wheel1,
+            wheel2: wheel2,
+            wheel3: 0
+        ) else { return }
+
+        event.flags = []
+        event.post(tap: .cghidEventTap)
+    }
+
+    private func accumulatedAutoScrollVelocity(current: CGFloat, delta: CGFloat, elapsed: TimeInterval, maxStep: CGFloat) -> CGFloat {
+        let elapsed = min(max(elapsed, 1.0 / 240.0), 0.12)
+        let decay = pow(0.2, CGFloat(elapsed / 0.12))
+        let decayedCurrent = current * decay
+        let impulse = autoScrollImpulse(fromScrollDelta: delta, maxStep: maxStep)
+
+        guard impulse != 0 else { return decayedCurrent }
+        guard decayedCurrent == 0 || impulse.sign == decayedCurrent.sign else {
+            return impulse
+        }
+
+        return max(-maxStep, min(maxStep, decayedCurrent + impulse))
+    }
+
+    private func autoScrollImpulse(fromScrollDelta delta: CGFloat, maxStep: CGFloat) -> CGFloat {
+        let sign: CGFloat = delta >= 0 ? 1 : -1
+        let value = abs(delta)
+        guard value > 0.05 else { return 0 }
+
+        let curved = pow(value, 1.18)
+        let minimumStep: CGFloat = 0.18
+        return sign * min(maxStep, max(minimumStep, curved * 1.7))
+    }
+
+    private func scrollStep(from velocity: CGFloat, residual: inout CGFloat) -> Int32 {
+        residual += velocity
+        let step: CGFloat
+        if residual >= 0 {
+            step = floor(residual)
+        } else {
+            step = ceil(residual)
+        }
+        residual -= step
+        return Int32(step)
+    }
+
     private func setupGestures() {
         Logger.shared.log("Initializing Gesture Support...")
         self.swipeTracker = SwipeTracker()
@@ -460,6 +802,16 @@ class StateController: MouseTrackerDelegate {
             } else if direction == .right {
                 DisplayMover.shared.moveActiveWindowToPrevDisplay()
             }
+        }
+
+        self.swipeTracker?.onCommandAutoScroll = { [weak self] event in
+            guard let self = self else { return }
+            guard self.isMiddleScrollGestureEnabled else { return }
+            self.handleCommandAutoScrollGesture(event)
+        }
+
+        self.swipeTracker?.onCommandAutoScrollEnd = { [weak self] in
+            self?.stopMiddleAutoScroll(reason: "command scroll ended")
         }
     }
     
@@ -489,7 +841,7 @@ class StateController: MouseTrackerDelegate {
     private func startClickMonitoring() {
         guard clickMonitor == nil else { return }
         
-        let mask: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown]
+        let mask: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
         clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
             self?.handleGlobalClick()
         }
@@ -512,6 +864,10 @@ class StateController: MouseTrackerDelegate {
     }
     
     private func handleGlobalClick() {
+        if isMiddleAutoScrollActive {
+            stopMiddleAutoScroll(reason: "mouse click")
+        }
+
         guard isEnabled, overlay.isVisible else { return }
         
         DispatchQueue.main.async {
@@ -570,6 +926,16 @@ class StateController: MouseTrackerDelegate {
                 updateOverlay(show: false, reason: "HoveringActiveApp: \(bundleId)")
                 return
             }
+
+            if let activeBundleId = activeApp?.bundleIdentifier, bundleId == activeBundleId {
+                updateOverlay(show: false, reason: "HoveringActiveBundle: \(bundleId)")
+                return
+            }
+        }
+
+        if isCursorOverFrontmostAppCGWindow(cursorPoint, primaryHeight: primaryScreenHeight) {
+            updateOverlay(show: false, reason: "CGVisualOverride")
+            return
         }
         
         if let activeWindowFrame = windowDetector.getActiveWindowFrame() {
@@ -688,20 +1054,95 @@ class StateController: MouseTrackerDelegate {
     private func isCursorOverActiveAppWindow(_ cursorPoint: CGPoint, primaryHeight: CGFloat) -> Bool {
         guard let activeApp = NSWorkspace.shared.frontmostApplication else { return false }
         let axApp = AXUIElementCreateApplication(activeApp.processIdentifier)
-        
+
+        var windows: [AXUIElement] = []
+
         var focusedWindow: AnyObject?
-        let result = AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focusedWindow)
-        guard result == .success, let windowEl = focusedWindow as! AXUIElement? else {
+        if AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focusedWindow) == .success,
+           let windowEl = focusedWindow as! AXUIElement? {
+            windows.append(windowEl)
+        }
+
+        var mainWindow: AnyObject?
+        if AXUIElementCopyAttributeValue(axApp, kAXMainWindowAttribute as CFString, &mainWindow) == .success,
+           let windowEl = mainWindow as! AXUIElement? {
+            windows.append(windowEl)
+        }
+
+        var windowsValue: AnyObject?
+        if AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsValue) == .success,
+           let appWindows = windowsValue as? [AXUIElement] {
+            windows.append(contentsOf: appWindows)
+        }
+
+        for windowEl in windows {
+            guard let rect = axWindowRect(windowEl, primaryHeight: primaryHeight) else { continue }
+            if rect.insetBy(dx: -5, dy: -5).contains(cursorPoint) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private func isCursorOverFrontmostAppCGWindow(_ cursorPoint: CGPoint, primaryHeight: CGFloat) -> Bool {
+        guard let activeApp = NSWorkspace.shared.frontmostApplication else { return false }
+
+        for info in visibleNormalWindowInfos() {
+            guard let windowRect = cocoaWindowRect(from: info, primaryHeight: primaryHeight),
+                  windowRect.insetBy(dx: -5, dy: -5).contains(cursorPoint),
+                  let ownerPID = info[kCGWindowOwnerPID as String] as? NSNumber else {
+                continue
+            }
+
+            return pidBelongsToApp(ownerPID.int32Value, activeApp)
+        }
+
+        return false
+    }
+
+    private func pidBelongsToApp(_ pid: pid_t, _ app: NSRunningApplication) -> Bool {
+        if pid == app.processIdentifier {
+            return true
+        }
+
+        guard let ownerApp = NSRunningApplication(processIdentifier: pid) else {
             return false
         }
-        
+
+        if let ownerBundleID = ownerApp.bundleIdentifier,
+           let activeBundleID = app.bundleIdentifier,
+           (ownerBundleID == activeBundleID ||
+            ownerBundleID.hasPrefix(activeBundleID + ".") ||
+            activeBundleID.hasPrefix(ownerBundleID + ".")) {
+            return true
+        }
+
+        if let ownerBundlePath = ownerApp.bundleURL?.standardizedFileURL.path,
+           let activeBundlePath = app.bundleURL?.standardizedFileURL.path,
+           (ownerBundlePath == activeBundlePath ||
+            ownerBundlePath.hasPrefix(activeBundlePath + "/") ||
+            activeBundlePath.hasPrefix(ownerBundlePath + "/")) {
+            return true
+        }
+
+        if let ownerExecutablePath = ownerApp.executableURL?.standardizedFileURL.path,
+           let activeBundlePath = app.bundleURL?.standardizedFileURL.path,
+           ownerExecutablePath.hasPrefix(activeBundlePath + "/") {
+            return true
+        }
+
+        return false
+    }
+
+    private func axWindowRect(_ windowEl: AXUIElement, primaryHeight: CGFloat) -> CGRect? {
         var posValue: AnyObject?
         var sizeValue: AnyObject?
         AXUIElementCopyAttributeValue(windowEl, kAXPositionAttribute as CFString, &posValue)
         AXUIElementCopyAttributeValue(windowEl, kAXSizeAttribute as CFString, &sizeValue)
         
         guard posValue != nil, sizeValue != nil else {
-            return false
+            return nil
         }
         let pos = posValue as! AXValue
         let size = sizeValue as! AXValue
@@ -715,6 +1156,6 @@ class StateController: MouseTrackerDelegate {
                                y: primaryHeight - (cgPos.y + cgSize.height),
                                width: cgSize.width,
                                height: cgSize.height)
-        return cocoaRect.contains(cursorPoint)
+        return cocoaRect
     }
 }
