@@ -21,8 +21,10 @@ class StateController: MouseTrackerDelegate {
     private var dockMinimizeMonitorGlobal: Any?
     private var activateVisibleMouseUpMonitorGlobal: Any?
     private var activateVisibleMouseUpMonitorLocal: Any?
+    private var hasActivateVisibleTerminationObserver = false
     private var lastDockMinimizeAttemptAt: TimeInterval = 0
     private var lastActivateVisibleRepairAt: TimeInterval = 0
+    private var suppressActivateVisibleUntil: TimeInterval = 0
     private var lastDockMouseDownFrontmostPID: pid_t?
     private var lastDockMouseDownItemName: String?
     private var lastDockMouseDownAt: TimeInterval = 0
@@ -242,6 +244,7 @@ class StateController: MouseTrackerDelegate {
     private func launchSelectedApp() {
         guard let path = selectedAppPath else { return }
         let url = URL(fileURLWithPath: path)
+        suppressActivateVisibleUntil = ProcessInfo.processInfo.systemUptime + 1.2
         NSWorkspace.shared.open(url)
     }
     
@@ -479,37 +482,64 @@ class StateController: MouseTrackerDelegate {
     private func setupActivateVisibleAppMonitoring() {
         if activateVisibleMouseUpMonitorGlobal == nil {
             activateVisibleMouseUpMonitorGlobal = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] _ in
-                self?.scheduleActivateVisibleAppRepair(reason: "global mouse up", cursorPoint: NSEvent.mouseLocation)
+                self?.scheduleActivateVisibleAppRepair(cursorPoint: NSEvent.mouseLocation)
             }
         }
 
         if activateVisibleMouseUpMonitorLocal == nil {
             activateVisibleMouseUpMonitorLocal = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
-                self?.scheduleActivateVisibleAppRepair(reason: "local mouse up", cursorPoint: NSEvent.mouseLocation)
+                self?.scheduleActivateVisibleAppRepair(cursorPoint: NSEvent.mouseLocation)
                 return event
             }
         }
+
+        if !hasActivateVisibleTerminationObserver {
+            NSWorkspace.shared.notificationCenter.addObserver(
+                self,
+                selector: #selector(handleApplicationDidTerminate(_:)),
+                name: NSWorkspace.didTerminateApplicationNotification,
+                object: nil
+            )
+            hasActivateVisibleTerminationObserver = true
+        }
     }
 
-    private func scheduleActivateVisibleAppRepair(reason: String, cursorPoint: CGPoint) {
+    @objc private func handleApplicationDidTerminate(_ notification: Notification) {
+        guard isActivateVisibleAppEnabled, !isSuspended else { return }
+
+        let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+        if app?.processIdentifier == NSRunningApplication.current.processIdentifier {
+            return
+        }
+
+        scheduleActivateVisibleAppRepair(
+            cursorPoint: NSEvent.mouseLocation,
+            delays: [0.12, 0.45, 1.35]
+        )
+    }
+
+    private func scheduleActivateVisibleAppRepair(cursorPoint: CGPoint, delays: [Double] = [0.12, 0.35]) {
         guard isActivateVisibleAppEnabled, !isSuspended else { return }
         guard let targetScreen = screen(containing: cursorPoint) else { return }
         let targetScreenFrame = targetScreen.frame
 
-        for delay in [0.12, 0.35] {
+        for delay in delays {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                self?.activateVisibleAppIfNeeded(reason: reason, targetScreenFrame: targetScreenFrame)
+                self?.activateVisibleAppIfNeeded(targetScreenFrame: targetScreenFrame)
             }
         }
     }
 
-    private func activateVisibleAppIfNeeded(reason: String, targetScreenFrame: CGRect) {
+    private func activateVisibleAppIfNeeded(targetScreenFrame: CGRect) {
         guard isActivateVisibleAppEnabled, !isSuspended else { return }
         guard WindowDetector.isAccessibilityTrusted() else { return }
         guard let primaryScreenHeight = NSScreen.screens.first?.frame.height else { return }
 
         let now = ProcessInfo.processInfo.systemUptime
         guard now - lastActivateVisibleRepairAt > 0.18 else { return }
+        guard now >= suppressActivateVisibleUntil else {
+            return
+        }
 
         guard let frontmost = NSWorkspace.shared.frontmostApplication else { return }
         let frontmostPID = frontmost.processIdentifier
@@ -518,18 +548,74 @@ class StateController: MouseTrackerDelegate {
             return
         }
 
+        if hasActiveAXSurface(frontmost, on: targetScreenFrame, primaryHeight: primaryScreenHeight) {
+            return
+        }
+
         guard let visibleApp = topVisibleNormalApplication(
             excluding: frontmostPID,
             on: targetScreenFrame,
             primaryHeight: primaryScreenHeight
         ) else {
-            Logger.shared.log("[ActivateVisible] no visible app found after \(reason)")
             return
         }
 
         lastActivateVisibleRepairAt = now
-        let activated = visibleApp.activate(options: [.activateAllWindows])
-        Logger.shared.log("[ActivateVisible] frontmost '\(frontmost.localizedName ?? "unknown")' has no visible window on target screen after \(reason); activating '\(visibleApp.localizedName ?? "unknown")', result=\(activated)")
+        visibleApp.activate(options: [.activateAllWindows])
+    }
+
+    private func hasActiveAXSurface(_ app: NSRunningApplication, on screenFrame: CGRect, primaryHeight: CGFloat) -> Bool {
+        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+
+        if let focusedWindow = copyAXElementAttribute(axApp, kAXFocusedWindowAttribute as CFString) {
+            return isUsableAXSurface(focusedWindow, on: screenFrame, primaryHeight: primaryHeight)
+        }
+
+        if let mainWindow = copyAXElementAttribute(axApp, kAXMainWindowAttribute as CFString) {
+            return isUsableAXSurface(mainWindow, on: screenFrame, primaryHeight: primaryHeight)
+        }
+
+        return false
+    }
+
+    private func isUsableAXSurface(_ windowEl: AXUIElement, on screenFrame: CGRect, primaryHeight: CGFloat) -> Bool {
+        if readWindowMinimizedState(windowEl) == true {
+            return false
+        }
+
+        let role = axStringAttribute(windowEl, kAXRoleAttribute as CFString)
+        let subrole = axStringAttribute(windowEl, kAXSubroleAttribute as CFString)
+        let isWindowLike = role == kAXWindowRole as String ||
+            role == "AXDialog" ||
+            role == "AXPopover" ||
+            subrole == "AXSystemDialog" ||
+            subrole == "AXFloatingWindow"
+
+        guard isWindowLike else {
+            return false
+        }
+
+        guard let rect = axWindowRect(windowEl, primaryHeight: primaryHeight) else {
+            return true
+        }
+
+        return rect.intersects(screenFrame)
+    }
+
+    private func copyAXElementAttribute(_ element: AXUIElement, _ attribute: CFString) -> AXUIElement? {
+        var value: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
+            return nil
+        }
+        return value as! AXUIElement?
+    }
+
+    private func axStringAttribute(_ element: AXUIElement, _ attribute: CFString) -> String? {
+        var value: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
+            return nil
+        }
+        return value as? String
     }
 
     private func hasVisibleNormalWindow(pid: pid_t, on screenFrame: CGRect, primaryHeight: CGFloat) -> Bool {

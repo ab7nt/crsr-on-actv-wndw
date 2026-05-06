@@ -530,6 +530,5 @@ class SettingsViewController: NSViewController {
     @objc func toggleActivateVisibleApp(_ sender: NSSwitch) {
         let enabled = stateController?.setActivateVisibleAppEnabledFromUser(sender.state == .on) ?? false
         sender.state = enabled ? .on : .off
-        Logger.shared.log("[ActivateVisible] setting EnableActivateVisibleApp=\(enabled)")
     }
 }

@@ -55,14 +55,14 @@ class TrackpadListener {
     private var initialThreeFingerCentroid: CGPoint?
     private var lastThreeFingerCentroid: CGPoint?
     private var accumulatedThreeFingerMovement: CGFloat = 0
+    private var validThreeFingerCentroidFrames = 0
     private var didMoveTooMuchForTap = false
     
     // Tunables
     private let maxTapDuration: TimeInterval = 0.35
-    private let maxTapMovement: CGFloat = 0.025
-    private let maxTapFrameMovement: CGFloat = 0.014
-    private let maxTapPathMovement: CGFloat = 0.04
-    private let maxTapVelocity: CGFloat = 0.55
+    private let maxTapMovement: CGFloat = 0.035
+    private let maxTapFrameMovement: CGFloat = 0.025
+    private let maxTapPathMovement: CGFloat = 0.07
     
     // Paths and Framework Handles
     private var frameworkHandle: UnsafeMutableRawPointer?
@@ -184,6 +184,7 @@ extension TrackpadListener {
             initialThreeFingerCentroid = nil
             lastThreeFingerCentroid = nil
             accumulatedThreeFingerMovement = 0
+            validThreeFingerCentroidFrames = 0
             didMoveTooMuchForTap = false
         }
         
@@ -198,43 +199,41 @@ extension TrackpadListener {
             if let centroid = threeFingerCentroid(from: frameData, fingers: fingers) {
                 initialThreeFingerCentroid = centroid
                 lastThreeFingerCentroid = centroid
-            } else {
-                didMoveTooMuchForTap = true
+                validThreeFingerCentroidFrames += 1
             }
         }
         
         if fingers == 3 {
-            guard let initialThreeFingerCentroid,
-                  let currentCentroid = threeFingerCentroid(from: frameData, fingers: fingers) else {
-                didMoveTooMuchForTap = true
-                lastFingerCount = fingers
-                return
-            }
+            if let currentCentroid = threeFingerCentroid(from: frameData, fingers: fingers) {
+                validThreeFingerCentroidFrames += 1
 
-            let dx = currentCentroid.x - initialThreeFingerCentroid.x
-            let dy = currentCentroid.y - initialThreeFingerCentroid.y
-            if hypot(dx, dy) > maxTapMovement {
-                didMoveTooMuchForTap = true
-            }
-
-            if let lastThreeFingerCentroid {
-                let frameMovement = hypot(
-                    currentCentroid.x - lastThreeFingerCentroid.x,
-                    currentCentroid.y - lastThreeFingerCentroid.y
-                )
-                accumulatedThreeFingerMovement += frameMovement
-
-                if frameMovement > maxTapFrameMovement || accumulatedThreeFingerMovement > maxTapPathMovement {
-                    didMoveTooMuchForTap = true
+                if initialThreeFingerCentroid == nil {
+                    initialThreeFingerCentroid = currentCentroid
+                    lastThreeFingerCentroid = currentCentroid
                 }
-            }
 
-            if let velocity = threeFingerVelocity(from: frameData, fingers: fingers),
-               hypot(velocity.x, velocity.y) > maxTapVelocity {
-                didMoveTooMuchForTap = true
-            }
+                if let initialThreeFingerCentroid {
+                    let dx = currentCentroid.x - initialThreeFingerCentroid.x
+                    let dy = currentCentroid.y - initialThreeFingerCentroid.y
+                    if hypot(dx, dy) > maxTapMovement {
+                        didMoveTooMuchForTap = true
+                    }
+                }
 
-            lastThreeFingerCentroid = currentCentroid
+                if let lastThreeFingerCentroid {
+                    let frameMovement = hypot(
+                        currentCentroid.x - lastThreeFingerCentroid.x,
+                        currentCentroid.y - lastThreeFingerCentroid.y
+                    )
+                    accumulatedThreeFingerMovement += frameMovement
+
+                    if frameMovement > maxTapFrameMovement || accumulatedThreeFingerMovement > maxTapPathMovement {
+                        didMoveTooMuchForTap = true
+                    }
+                }
+
+                lastThreeFingerCentroid = currentCentroid
+            }
         }
         
         // End of touch sequence (all fingers up)
@@ -247,6 +246,7 @@ extension TrackpadListener {
                 // Consider it a 3-finger tap if we reached exactly 3 fingers
                 // and released soon after that moment.
                 if maxFingersSeenInTouch == 3, threeToRelease <= maxTapDuration, !didMoveTooMuchForTap {
+                    let validCentroidFrames = validThreeFingerCentroidFrames
                     DispatchQueue.main.async {
                         // If double tap is not configured, fire single tap immediately
                         guard self.onThreeFingerDoubleTap != nil else {
@@ -254,9 +254,15 @@ extension TrackpadListener {
                             return
                         }
 
+                        guard validCentroidFrames > 0 else {
+                            self.lastTapTimestamp = 0
+                            return
+                        }
+
                         // Check for double tap
                         let now = Date().timeIntervalSince1970
-                        if now - self.lastTapTimestamp < self.doubleTapThreshold {
+                        let sinceLastTap = now - self.lastTapTimestamp
+                        if sinceLastTap < self.doubleTapThreshold {
                             // Double Tap detected!
                             self.pendingSingleTapWorkItem?.cancel()
                             self.pendingSingleTapWorkItem = nil
@@ -284,6 +290,7 @@ extension TrackpadListener {
             initialThreeFingerCentroid = nil
             lastThreeFingerCentroid = nil
             accumulatedThreeFingerMovement = 0
+            validThreeFingerCentroidFrames = 0
             didMoveTooMuchForTap = false
         }
         
@@ -298,41 +305,32 @@ extension TrackpadListener {
         var sumY: CGFloat = 0
         
         for index in 0..<fingers {
-            let position = contacts[index].normalizedPosition
-            let x = CGFloat(position.x)
-            let y = CGFloat(position.y)
-            
-            guard x.isFinite, y.isFinite, (-0.1...1.1).contains(x), (-0.1...1.1).contains(y) else {
+            guard let point = normalizedPoint(for: contacts[index]) else {
                 return nil
             }
-            
-            sumX += x
-            sumY += y
+
+            sumX += point.x
+            sumY += point.y
         }
         
         return CGPoint(x: sumX / CGFloat(fingers), y: sumY / CGFloat(fingers))
     }
 
-    private func threeFingerVelocity(from frameData: UnsafeMutableRawPointer?, fingers: Int) -> CGPoint? {
-        guard fingers == 3, let frameData else { return nil }
+    private func normalizedPoint(for contact: MTContact) -> CGPoint? {
+        let candidates = [
+            contact.normalizedPosition,
+            contact.normalizedVector.position
+        ]
 
-        let contacts = frameData.assumingMemoryBound(to: MTContact.self)
-        var sumX: CGFloat = 0
-        var sumY: CGFloat = 0
+        for position in candidates {
+            let x = CGFloat(position.x)
+            let y = CGFloat(position.y)
 
-        for index in 0..<fingers {
-            let velocity = contacts[index].normalizedVector.velocity
-            let x = CGFloat(velocity.x)
-            let y = CGFloat(velocity.y)
-
-            guard x.isFinite, y.isFinite else {
-                return nil
+            if x.isFinite, y.isFinite, (-0.1...1.1).contains(x), (-0.1...1.1).contains(y) {
+                return CGPoint(x: x, y: y)
             }
-
-            sumX += x
-            sumY += y
         }
 
-        return CGPoint(x: sumX / CGFloat(fingers), y: sumY / CGFloat(fingers))
+        return nil
     }
 }
