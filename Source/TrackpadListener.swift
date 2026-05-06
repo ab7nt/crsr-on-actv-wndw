@@ -53,11 +53,16 @@ class TrackpadListener {
     private var firstThreeFingerTs: TimeInterval?
     private var maxFingersSeenInTouch = 0
     private var initialThreeFingerCentroid: CGPoint?
+    private var lastThreeFingerCentroid: CGPoint?
+    private var accumulatedThreeFingerMovement: CGFloat = 0
     private var didMoveTooMuchForTap = false
     
     // Tunables
     private let maxTapDuration: TimeInterval = 0.35
-    private let maxTapMovement: CGFloat = 0.035
+    private let maxTapMovement: CGFloat = 0.025
+    private let maxTapFrameMovement: CGFloat = 0.014
+    private let maxTapPathMovement: CGFloat = 0.04
+    private let maxTapVelocity: CGFloat = 0.55
     
     // Paths and Framework Handles
     private var frameworkHandle: UnsafeMutableRawPointer?
@@ -177,6 +182,8 @@ extension TrackpadListener {
             firstThreeFingerTs = nil
             maxFingersSeenInTouch = fingers
             initialThreeFingerCentroid = nil
+            lastThreeFingerCentroid = nil
+            accumulatedThreeFingerMovement = 0
             didMoveTooMuchForTap = false
         }
         
@@ -188,17 +195,46 @@ extension TrackpadListener {
         // First moment we reached 3 fingers in this touch sequence
         if fingers == 3, firstThreeFingerTs == nil {
             firstThreeFingerTs = nowTs
-            initialThreeFingerCentroid = threeFingerCentroid(from: frameData, fingers: fingers)
+            if let centroid = threeFingerCentroid(from: frameData, fingers: fingers) {
+                initialThreeFingerCentroid = centroid
+                lastThreeFingerCentroid = centroid
+            } else {
+                didMoveTooMuchForTap = true
+            }
         }
         
-        if fingers == 3,
-           let initialThreeFingerCentroid,
-           let currentCentroid = threeFingerCentroid(from: frameData, fingers: fingers) {
+        if fingers == 3 {
+            guard let initialThreeFingerCentroid,
+                  let currentCentroid = threeFingerCentroid(from: frameData, fingers: fingers) else {
+                didMoveTooMuchForTap = true
+                lastFingerCount = fingers
+                return
+            }
+
             let dx = currentCentroid.x - initialThreeFingerCentroid.x
             let dy = currentCentroid.y - initialThreeFingerCentroid.y
             if hypot(dx, dy) > maxTapMovement {
                 didMoveTooMuchForTap = true
             }
+
+            if let lastThreeFingerCentroid {
+                let frameMovement = hypot(
+                    currentCentroid.x - lastThreeFingerCentroid.x,
+                    currentCentroid.y - lastThreeFingerCentroid.y
+                )
+                accumulatedThreeFingerMovement += frameMovement
+
+                if frameMovement > maxTapFrameMovement || accumulatedThreeFingerMovement > maxTapPathMovement {
+                    didMoveTooMuchForTap = true
+                }
+            }
+
+            if let velocity = threeFingerVelocity(from: frameData, fingers: fingers),
+               hypot(velocity.x, velocity.y) > maxTapVelocity {
+                didMoveTooMuchForTap = true
+            }
+
+            lastThreeFingerCentroid = currentCentroid
         }
         
         // End of touch sequence (all fingers up)
@@ -246,6 +282,8 @@ extension TrackpadListener {
             firstThreeFingerTs = nil
             maxFingersSeenInTouch = 0
             initialThreeFingerCentroid = nil
+            lastThreeFingerCentroid = nil
+            accumulatedThreeFingerMovement = 0
             didMoveTooMuchForTap = false
         }
         
@@ -272,6 +310,29 @@ extension TrackpadListener {
             sumY += y
         }
         
+        return CGPoint(x: sumX / CGFloat(fingers), y: sumY / CGFloat(fingers))
+    }
+
+    private func threeFingerVelocity(from frameData: UnsafeMutableRawPointer?, fingers: Int) -> CGPoint? {
+        guard fingers == 3, let frameData else { return nil }
+
+        let contacts = frameData.assumingMemoryBound(to: MTContact.self)
+        var sumX: CGFloat = 0
+        var sumY: CGFloat = 0
+
+        for index in 0..<fingers {
+            let velocity = contacts[index].normalizedVector.velocity
+            let x = CGFloat(velocity.x)
+            let y = CGFloat(velocity.y)
+
+            guard x.isFinite, y.isFinite else {
+                return nil
+            }
+
+            sumX += x
+            sumY += y
+        }
+
         return CGPoint(x: sumX / CGFloat(fingers), y: sumY / CGFloat(fingers))
     }
 }
